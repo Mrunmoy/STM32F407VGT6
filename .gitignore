@@ -1,0 +1,64 @@
+# STM32CubeIDE generated files
+*.launch
+*.bin
+*.elf
+*.hex
+*.map
+*.list
+*.srec
+*.o
+*.d
+*.dep
+*.su
+*.i
+*.log
+*.out
+*.axf
+
+# IDE specific - .vscode is intentionally NOT globally ignored: the threadx
+# target's targets/threadx/.vscode/{tasks,launch}.json (Cortex-Debug config)
+# are real, committed project files, not local editor state.
+.project
+.cproject
+.settings/
+.metadata/
+.ipch/
+
+# STM32CubeMX generated files
+MX_*/                # Temporary MX config files
+*.ioc_backup
+*.ioc~*
+
+# Build directories (host CMake build; freertos/threadx Make Debug/;
+# Zephyr's out-of-repo build_zephyr/ - see targets/zephyr's notes in
+# CLAUDE.md for why the west workspace itself isn't here either)
+/build/
+/targets/freertos/Debug/
+/targets/threadx/Debug/
+/build_zephyr/
+
+# System files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Python venvs (if used for scripts/tools)
+venv/
+__pycache__/
+*.pyc
+
+# User Notes / artifacts
+*.orig
+*.swp
+*.swo
+*.bak
+*.tmp
+
+# JetBrains (CLion) or other editors
+.idea/
+*.iml
+
+# AI assistant tooling/config - not part of the project
+CLAUDE.md
+AGENTS.md
+.claude/
