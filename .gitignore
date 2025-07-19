@@ -1,0 +1,56 @@
+# STM32CubeIDE generated files
+*.launch
+*.bin
+*.elf
+*.hex
+*.map
+*.list
+*.srec
+*.o
+*.d
+*.dep
+*.su
+*.i
+*.log
+*.out
+*.axf
+
+# IDE specific
+.project
+.cproject
+.settings/
+.metadata/
+.ipch/
+.vscode/
+
+# STM32CubeMX generated files
+MX_*/                # Temporary MX config files
+*.ioc_backup
+*.ioc~*
+
+# Build directories
+/Debug/
+/Release/
+/build/
+/build_*/*
+
+# System files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Python venvs (if used for scripts/tools)
+venv/
+__pycache__/
+*.pyc
+
+# User Notes / artifacts
+*.orig
+*.swp
+*.swo
+*.bak
+*.tmp
+
+# JetBrains (CLion) or other editors
+.idea/
+*.iml
