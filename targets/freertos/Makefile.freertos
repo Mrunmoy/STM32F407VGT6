@@ -1,0 +1,181 @@
+# ── STM32F407 + FreeRTOS/USBH/FatFS — command-line build ──────────────────
+# Produces Debug/stm32f407.{elf,hex,bin}. This target links three kinds of
+# source: this directory's own FreeRTOS-target files (Core/,
+# Middlewares/Third_Party/FreeRTOS, os_glue/), the shared OS-agnostic
+# application layer at ../../app (identical across all RTOS targets and the
+# host build), and shared vendor libs at ../../external (the STM32 HAL/CMSIS,
+# FatFS, ST's USB Host library, libcfuture - see ../../external/stm32f4xx_hal
+# for why the HAL moved there: it used to be duplicated per-target and had
+# quietly drifted to two different upstream versions).
+#
+# This is invoked by build.py --target freertos --build; it is not meant to
+# be used directly by an IDE (STM32CubeIDE still owns .project/.cproject).
+
+TARGET = stm32f407
+BUILD_DIR = Debug
+
+# The per-file $(eval)'d compile rules below are textually the first rules
+# Make encounters (before "all:"), which would otherwise silently make one
+# arbitrary .o file - not "all" - the default goal. Pin it explicitly.
+.DEFAULT_GOAL := all
+
+# ── Toolchain ─────────────────────────────────────────────────────────────
+# By default the arm-none-eabi tools are taken from PATH. To build against a
+# toolchain that is not on PATH, pass its bin dir explicitly, e.g. the
+# STM32CubeIDE-bundled GCC 14.3 used to verify this Makefile:
+#     make -f Makefile.freertos \
+#       GCC_PATH=/opt/st/stm32cubeide_2.2.0/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.14.3.rel1.linux64_1.0.100.202602081740/tools/bin
+GCC_PATH ?=
+PREFIX = arm-none-eabi-
+ifeq ($(strip $(GCC_PATH)),)
+CC = $(PREFIX)gcc
+AS = $(PREFIX)gcc -x assembler-with-cpp
+CP = $(PREFIX)objcopy
+SZ = $(PREFIX)size
+else
+CC = $(GCC_PATH)/$(PREFIX)gcc
+AS = $(GCC_PATH)/$(PREFIX)gcc -x assembler-with-cpp
+CP = $(GCC_PATH)/$(PREFIX)objcopy
+SZ = $(GCC_PATH)/$(PREFIX)size
+endif
+HEX = $(CP) -O ihex
+BIN = $(CP) -O binary -S
+
+# ── MCU / FPU ─────────────────────────────────────────────────────────────
+CPU = -mcpu=cortex-m4
+FPU = -mfpu=fpv4-sp-d16
+FLOAT-ABI = -mfloat-abi=hard
+MCU = $(CPU) -mthumb $(FPU) $(FLOAT-ABI)
+
+# ── Defines ───────────────────────────────────────────────────────────────
+C_DEFS = \
+  -DUSE_HAL_DRIVER \
+  -DSTM32F407xx
+
+# ── Shared tree (identical across all targets + host) ──────────────────────
+APP_DIR = ../../app
+EXTERNAL_DIR = ../../external
+
+# ── Include paths ─────────────────────────────────────────────────────────
+C_INCLUDES = \
+  -ICore/Inc \
+  -Ios_glue/include \
+  -I$(APP_DIR)/include \
+  -I$(EXTERNAL_DIR)/stm32f4xx_hal/STM32F4xx_HAL_Driver/Inc \
+  -I$(EXTERNAL_DIR)/stm32f4xx_hal/STM32F4xx_HAL_Driver/Inc/Legacy \
+  -I$(EXTERNAL_DIR)/stm32f4xx_hal/CMSIS/Device/ST/STM32F4xx/Include \
+  -I$(EXTERNAL_DIR)/stm32f4xx_hal/CMSIS/Include \
+  -IMiddlewares/Third_Party/FreeRTOS/Source/include \
+  -IMiddlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2 \
+  -IMiddlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F \
+  -I$(EXTERNAL_DIR)/fatfs \
+  -I$(EXTERNAL_DIR)/fatfs/src \
+  -I$(EXTERNAL_DIR)/usb_host_lib/Core/Inc \
+  -I$(EXTERNAL_DIR)/usb_host_lib/Class/MSC/Inc \
+  -I$(EXTERNAL_DIR)/cfuture/include
+
+# ── Sources ───────────────────────────────────────────────────────────────
+# FatFS: exclude diskio.c (FatFS's own generic disk_read/disk_write/...
+# template) and ff_gen_drv.c (ST's alternate Diskio_drvTypeDef indirection
+# layer) - neither is used. app/src/fatfs_diskio.c implements Chan's raw
+# diskio.h contract directly on top of PalStorage; compiling the vendor
+# diskio.c alongside it would fail to link with duplicate disk_* symbols.
+FATFS_SOURCES = $(filter-out %/diskio.c %/ff_gen_drv.c,$(wildcard $(EXTERNAL_DIR)/fatfs/src/*.c))
+
+# libcfuture: always compile the core (cfuture.c) plus whatever OSAL sync
+# adapter(s) live under src/adapters EXCEPT cfuture_posix.c (pthread/POSIX
+# only, no bare-metal ARM build) and cfuture_win32.c (Windows-only) - this
+# target's own cfuture_sync_ops.c (os_glue/src/) is the real sync_ops
+# provider, so no adapter from external/cfuture/src/adapters is actually
+# needed today; the filtered wildcard is kept so a future portable adapter
+# there gets picked up automatically without touching this Makefile again.
+CFUTURE_SOURCES = \
+  $(EXTERNAL_DIR)/cfuture/src/cfuture.c \
+  $(filter-out %_posix.c %_win32.c,$(wildcard $(EXTERNAL_DIR)/cfuture/src/adapters/*.c))
+
+C_SOURCES = \
+  $(wildcard Core/Src/*.c) \
+  $(wildcard os_glue/src/*.c) \
+  $(wildcard $(APP_DIR)/src/*.c) \
+  $(wildcard $(EXTERNAL_DIR)/gcc_newlib_stubs/*.c) \
+  $(EXTERNAL_DIR)/stm32f4xx_hal/CMSIS/Device/ST/STM32F4xx/Source/Templates/system_stm32f4xx.c \
+  $(wildcard $(EXTERNAL_DIR)/stm32f4xx_hal/STM32F4xx_HAL_Driver/Src/*.c) \
+  $(wildcard Middlewares/Third_Party/FreeRTOS/Source/*.c) \
+  $(wildcard Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F/*.c) \
+  $(wildcard Middlewares/Third_Party/FreeRTOS/Source/portable/MemMang/heap_4.c) \
+  $(wildcard Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2/*.c) \
+  $(wildcard $(EXTERNAL_DIR)/usb_host_lib/Core/Src/*.c) \
+  $(wildcard $(EXTERNAL_DIR)/usb_host_lib/Class/MSC/Src/*.c) \
+  $(FATFS_SOURCES) \
+  $(CFUTURE_SOURCES)
+# Note: portable/MemMang/heap_4.c is pulled in explicitly (not by a blanket
+# portable/MemMang/*.c wildcard) because heap_4 is this project's configured
+# FreeRTOS allocator (see Core/Inc/FreeRTOSConfig.h / the .ioc's
+# configTOTAL_HEAP_SIZE) and it is the only file in that directory today -
+# a blanket wildcard would silently start linking a second heap_*.c (and its
+# clashing pvPortMalloc/vPortFree symbols) the moment ST's FreeRTOS package
+# ever adds another allocator file to the same folder.
+
+ASM_SOURCES = $(wildcard Core/Src/*.s) $(wildcard Core/Startup/*.s)
+
+# ── Flags ─────────────────────────────────────────────────────────────────
+# -O0 gives linear, line-by-line single-stepping during bring-up debugging.
+# Switch to -Og/-O2 for size/speed once debugging is done.
+OPT = -O0
+CFLAGS = $(MCU) $(C_DEFS) $(C_INCLUDES) $(OPT) -Wall -fdata-sections -ffunction-sections -g -gdwarf-2
+ASFLAGS = $(MCU) $(OPT) -Wall -fdata-sections -ffunction-sections -g -gdwarf-2
+
+LDSCRIPT = STM32F407VGTX_FLASH.ld
+LIBS = -lc -lm -lnosys
+LDFLAGS = $(MCU) -specs=nano.specs -T$(LDSCRIPT) $(LIBS) \
+  -Wl,-Map=$(BUILD_DIR)/$(TARGET).map,--cref -Wl,--gc-sections
+
+# ── Object list ────────────────────────────────────────────────────────────
+# Sources reached via ../../app or ../../external live OUTSIDE this
+# directory - a plain "$(BUILD_DIR)/%.o: %.c" pattern rule would place their
+# .o files at literal paths like "Debug/../../app/src/logger.o", which
+# collapses to a path OUTSIDE Debug/ entirely (polluting the shared source
+# tree with build artifacts, and racing with any other target built from the
+# same shared files). Strip every "../" from the object path (but not the
+# source path used to actually compile) so every object lands under
+# Debug/<sanitized-relative-path>.o instead, and generate one explicit rule
+# per source file rather than relying on a single pattern rule.
+sanitize = $(subst ../,,$(1))
+
+C_OBJECTS = $(addprefix $(BUILD_DIR)/,$(call sanitize,$(C_SOURCES:.c=.o)))
+ASM_OBJECTS = $(addprefix $(BUILD_DIR)/,$(call sanitize,$(ASM_SOURCES:.s=.o)))
+OBJECTS = $(C_OBJECTS) $(ASM_OBJECTS)
+
+define C_COMPILE_RULE
+$(BUILD_DIR)/$(call sanitize,$(1:.c=.o)): $(1)
+	@mkdir -p $$(dir $$@)
+	$(CC) -c $(CFLAGS) -MMD -MP -MF"$$(@:.o=.d)" $$< -o $$@
+endef
+$(foreach src,$(C_SOURCES),$(eval $(call C_COMPILE_RULE,$(src))))
+
+define ASM_COMPILE_RULE
+$(BUILD_DIR)/$(call sanitize,$(1:.s=.o)): $(1)
+	@mkdir -p $$(dir $$@)
+	$(AS) -c $(ASFLAGS) $$< -o $$@
+endef
+$(foreach src,$(ASM_SOURCES),$(eval $(call ASM_COMPILE_RULE,$(src))))
+
+# ── Rules ─────────────────────────────────────────────────────────────────
+all: $(BUILD_DIR)/$(TARGET).elf $(BUILD_DIR)/$(TARGET).hex $(BUILD_DIR)/$(TARGET).bin
+
+$(BUILD_DIR)/$(TARGET).elf: $(OBJECTS)
+	$(CC) $(OBJECTS) $(LDFLAGS) -o $@
+	$(SZ) $@
+
+$(BUILD_DIR)/%.hex: $(BUILD_DIR)/%.elf
+	$(HEX) $< $@
+
+$(BUILD_DIR)/%.bin: $(BUILD_DIR)/%.elf
+	$(BIN) $< $@
+
+clean:
+	rm -rf $(BUILD_DIR)
+
+-include $(wildcard $(BUILD_DIR)/**/*.d)
+
+.PHONY: all clean
