@@ -1,0 +1,52 @@
+/*
+ * Overlay adapting the black_f407zg_pro board definition (same chip,
+ * STM32F407ZGT6, as our FK407M2-ZGT6 board) to this board's real wiring:
+ * user LED on PC13 (active-low) instead of PF9/PF10, and USART1 on
+ * PA9(TX)/PA10(RX) instead of PB6/PB7.
+ */
+
+/ {
+	leds {
+		compatible = "gpio-leds";
+		fk407_led: led_pc13 {
+			gpios = <&gpioc 13 GPIO_ACTIVE_LOW>;
+			label = "User LED";
+		};
+	};
+
+	aliases {
+		led0 = &fk407_led;
+	};
+
+	chosen {
+		zephyr,console = &usart1;
+		zephyr,shell-uart = &usart1;
+	};
+};
+
+&usart1 {
+	pinctrl-0 = <&usart1_tx_pa9 &usart1_rx_pa10>;
+	pinctrl-names = "default";
+	current-speed = <115200>;
+	status = "okay";
+};
+
+&usart2 {
+	status = "disabled";
+};
+
+/* This app drives USB_OTG_FS directly in Host mode via a vendored ST HAL
+ * HCD driver + USB Host MSC library (see app/CMakeLists.txt and
+ * app/src/usbh_conf_zephyr.c), bypassing Zephyr's own native USB stack
+ * entirely (it has no USB Host MSC class driver - see CLAUDE.md).
+ *
+ * The vendor board's usbotg_fs node is deliberately left "okay" (its
+ * upstream default), NOT disabled: Zephyr only actually compiles/inits its
+ * own Device-mode UDC driver for this node when CONFIG_USB_DEVICE_STACK (or
+ * similar) is enabled, which this app's prj.conf never does - so leaving it
+ * "okay" costs nothing at runtime, but keeps IRQ67 visible to devicetree,
+ * which Zephyr's NUM_IRQS auto-sizing (soc/st/stm32/Kconfig.defconfig)
+ * depends on to size the ISR table large enough for our own manual
+ * IRQ_CONNECT(OTG_FS_IRQn, ...) in usbh_conf_zephyr.c. Disabling this node
+ * shrinks NUM_IRQS below 67 and breaks that IRQ_CONNECT() at build time -
+ * do not disable it. */
