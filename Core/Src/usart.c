@@ -21,7 +21,7 @@
 #include "usart.h"
 
 /* USER CODE BEGIN 0 */
-
+static volatile uint8_t uart_initialized = 0;
 /* USER CODE END 0 */
 
 UART_HandleTypeDef huart1;
@@ -51,7 +51,7 @@ void MX_USART1_UART_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN USART1_Init 2 */
-
+  uart_initialized = 1;
   /* USER CODE END USART1_Init 2 */
 
 }
@@ -110,5 +110,37 @@ void HAL_UART_MspDeInit(UART_HandleTypeDef* uartHandle)
 }
 
 /* USER CODE BEGIN 1 */
+
+/*
+ * Initialize UART from exception context.
+ * This sets up USART1 directly via registers if it wasn't already initialized.
+ * Safe to call from fault handlers since it doesn't use RTOS or interrupts.
+ */
+void InitUartFromException(void)
+{
+  if (uart_initialized)
+    return;
+
+  __HAL_RCC_USART1_CLK_ENABLE();
+  __HAL_RCC_GPIOA_CLK_ENABLE();
+
+  /* PA9 = TX, PA10 = RX */
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+  GPIO_InitStruct.Pin = GPIO_PIN_9 | GPIO_PIN_10;
+  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+  GPIO_InitStruct.Alternate = GPIO_AF7_USART1;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /* 115200 8N1 via direct register writes */
+  USART1->CR1 = 0;
+  USART1->CR2 = 0;
+  USART1->CR3 = 0;
+  USART1->BRR = (SystemCoreClock / 2) / 115200;
+  USART1->CR1 = USART_CR1_UE | USART_CR1_TE | USART_CR1_RE;
+
+  uart_initialized = 1;
+}
 
 /* USER CODE END 1 */

@@ -25,6 +25,7 @@
 /* USER CODE BEGIN Includes */
 #include "gpio.h"
 #include "usart.h"
+#include "stm32f4xx_it.h"
 #include <stdio.h>
 #include <string.h>
 /* USER CODE END Includes */
@@ -165,6 +166,12 @@ static void app_thread_entry(ULONG thread_input)
     /* Print status every iteration */
     int len = snprintf(msg, sizeof(msg), "App running: count=%lu\r\n", counter);
     HAL_UART_Transmit(&huart1, (uint8_t *)msg, len, HAL_MAX_DELAY);
+
+    /* Trigger a test fault after 5 iterations */
+    if (counter == 5)
+    {
+      TriggerTestFault(2);
+    }
 
     /* Sleep for 2 seconds */
     tx_thread_sleep(TX_TIMER_TICKS_PER_SECOND * 2);
