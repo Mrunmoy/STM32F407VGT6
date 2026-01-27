@@ -98,18 +98,33 @@ pip install pyserial
 python crash_monitor.py -p COM3 -e ../Debug/stm32f407.elf
 ```
 
-When a crash occurs, it automatically shows the source location:
+When a crash occurs, it automatically shows the source location, surrounding code, and disassembly:
 
 ```
-========================================
-          HARD FAULT DETECTED
-========================================
-
+============================================================
+ CRASH DETECTED
+============================================================
 Fault PC  = 0x080012A2
-         >>> Fault PC: TriggerTestFault at Core/Src/stm32f4xx_it.c:489
-Fault LR  = 0x080012A3
-         >>> Fault LR: TriggerTestFault at Core/Src/stm32f4xx_it.c:489
+
+         --- PC: TriggerTestFault() ---
+         Core/Src/stm32f4xx_it.c:489
+         Source:
+     >>>  489:     __asm volatile(".word 0xFFFFFFFF");
+          490:     break;
+          491:   }
+          492: }
+         Disassembly:
+     >>>  80012a2:  ffffffff  ; undefined instruction
+
+Fault LR  = 0x08001234
+...
 ```
+
+The script:
+- Parses PC and LR addresses from crash output
+- Runs `arm-none-eabi-addr2line` to get function name and source location
+- Shows 5 lines of source code around the crash (marked with >>>)
+- Shows disassembly from the .list file if available
 
 ### Manual decoding with addr2line
 
@@ -126,6 +141,47 @@ Core/Src/stm32f4xx_it.c:489
 ```
 
 The `.list` file in the Debug folder has the full disassembly if you need more context.
+
+---
+
+## Memory usage tool
+
+There's also a Python script to show how much FLASH and RAM is being used after a build:
+
+```
+cd tools
+python memory_usage.py -e ../Debug/stm32f407.elf
+```
+
+Output:
+```
+============================================================
+                    MEMORY USAGE
+============================================================
+
+FLASH:
+  [########--------------------------------]  19.2%
+  Used:     196.54 KB  /  Total: 1.00 MB
+  Free:     827.46 KB
+
+RAM:
+  [####------------------------------------]  11.5%
+  Used:      14.75 KB  /  Total: 128.00 KB
+  Free:     113.25 KB
+
+CCMRAM:
+  [----------------------------------------]  0.0%
+  Used:       0.00 KB  /  Total: 64.00 KB
+  Free:      64.00 KB
+
+============================================================
+```
+
+Use `-v` for verbose output showing section breakdown:
+
+```
+python memory_usage.py -e ../Debug/stm32f407.elf -v
+```
 
 ---
 
