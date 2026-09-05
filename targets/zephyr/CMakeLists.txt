@@ -70,6 +70,7 @@ target_sources(app PRIVATE
 
     # Shared vendored libcfuture
     ${SHARED_EXTERNAL_DIR}/cfuture/src/cfuture.c
+    ${SHARED_EXTERNAL_DIR}/cfuture/src/cfuture_pal.c
 )
 
 target_include_directories(app PRIVATE

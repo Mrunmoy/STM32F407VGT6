@@ -77,6 +77,7 @@ C_INCLUDES = \
 FATFS_SOURCES = $(filter-out %/diskio.c %/ff_gen_drv.c,$(wildcard $(EXTERNAL_DIR)/fatfs/src/*.c))
 CFUTURE_SOURCES = \
   $(EXTERNAL_DIR)/cfuture/src/cfuture.c \
+  $(EXTERNAL_DIR)/cfuture/src/cfuture_pal.c \
   $(filter-out %_posix.c %_win32.c,$(wildcard $(EXTERNAL_DIR)/cfuture/src/adapters/*.c))
 
 C_SOURCES = \
