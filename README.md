@@ -31,16 +31,23 @@ The showcase workload implements an asynchronous, lock-free USB Host Mass Storag
   - [Target Platform Comparison Matrix](#target-platform-comparison-matrix)
   - [The Uniform `os_glue/` Architecture](#the-uniform-os_glue-architecture)
   - [Target Bring-Up Flow](#target-bring-up-flow)
-- [5. Hardware Specification & Electrical Wiring](#5-hardware-specification--electrical-wiring)
-- [6. Repository Layout & File Taxonomy](#6-repository-layout--file-taxonomy)
-- [7. Toolchain Setup & Build Guide](#7-toolchain-setup--build-guide)
+- [5. Porting Guide: Adding a New RTOS Target](#5-porting-guide-adding-a-new-rtos-target)
+  - [Step 1: Scaffold Target Directory Layout](#step-1-scaffold-target-directory-layout)
+  - [Step 2: Implement the Canonical `os_glue` Interfaces](#step-2-implement-the-canonical-os_glue-interfaces)
+  - [Step 3: Implement Peripheral & Interrupt Glue](#step-3-implement-peripheral--interrupt-glue)
+  - [Step 4: Wire the Target Composition Root](#step-4-wire-the-target-composition-root)
+  - [Step 5: Integrate into `build.py`](#step-5-integrate-into-buildpy)
+  - [Porting Checklist & Common Gotchas](#porting-checklist--common-gotchas)
+- [6. Hardware Specification & Electrical Wiring](#6-hardware-specification--electrical-wiring)
+- [7. Repository Layout & File Taxonomy](#7-repository-layout--file-taxonomy)
+- [8. Toolchain Setup & Build Guide](#8-toolchain-setup--build-guide)
   - [Prerequisites](#prerequisites)
   - [Unified Build Driver (`build.py`)](#unified-build-driver-buildpy)
   - [Zephyr Freestanding Workspace](#zephyr-freestanding-workspace)
-- [8. Diagnostics, Testing & Host Tooling](#8-diagnostics-testing--host-tooling)
+- [9. Diagnostics, Testing & Host Tooling](#9-diagnostics-testing--host-tooling)
   - [Real-Time UART Exception Decoder](#real-time-uart-exception-decoder)
   - [Runtime Task Profiling Telemetry](#runtime-task-profiling-telemetry)
-- [9. License](#9-license)
+- [10. License](#10-license)
 
 ---
 
@@ -311,7 +318,138 @@ Grepping for any adapter filename (e.g., `osal.c` or `board_led.c`) finds all fo
 
 ---
 
-## 5. Hardware Specification & Electrical Wiring
+## 5. Porting Guide: Adding a New RTOS Target
+
+Porting this architecture to a new RTOS (e.g., **RT-Thread**, **SEGGER embOS**, **Apache NuttX**, or a proprietary in-house kernel) requires **zero modifications** to `app/`. The porting process follows a structured 5-step checklist.
+
+### Step 1: Scaffold Target Directory Layout
+
+Create a new directory `targets/<new_rtos>/` mirroring the uniform repository structure:
+
+```text
+targets/<new_rtos>/
+├── os_glue/
+│   ├── include/
+│   │   ├── board_led.h          # LED device init
+│   │   ├── cfuture_sync_ops.h   # Synchronization operations header
+│   │   ├── log_sink_impl.h      # Log sink init
+│   │   └── time_source_impl.h   # Time source init
+│   └── src/
+│       ├── board_led.c          # Concrete LED driver
+│       ├── cfuture_sync_ops.c   # Binary semaphore adapter for libcfuture
+│       ├── log_sink_impl.c      # Concrete UART character stream driver
+│       ├── osal.c               # Full OSAL implementation
+│       ├── time_source_impl.c   # Monotonic clock driver
+│       ├── usb_host_irq.c       # USB OTG FS IRQ routing (if on STM32)
+│       └── board_start_app.c   # Composition root
+├── Makefile                     # Or CMakeLists.txt
+└── Core/, Middlewares/          # Kernel source and startup code
+```
+
+### Step 2: Implement the Canonical `os_glue` Interfaces
+
+Implement the five standard contracts in `targets/<new_rtos>/os_glue/src/`:
+
+1. **`osal.c` (`app/include/osal.h`)**:
+   - **Task Management**:
+     - `osal_task_create(const OsalTaskConfig *config, OsalTaskHandle *outHandle)`: Translate `OsalTaskConfig` (name, entry, context, stack size in bytes, priority) into native kernel thread creation.
+     - `osal_task_exit(void)`: Terminate the calling thread cleanly (must never return).
+   - **Message Queues**:
+     - `osal_queue_create(uint32_t itemCount, size_t itemSize, OsalQueueHandle *outHandle)`
+     - `osal_queue_send(OsalQueueHandle handle, const void *item, uint32_t timeoutMs)`
+     - `osal_queue_receive(OsalQueueHandle handle, void *outItem, uint32_t timeoutMs)`
+   - **Mutual Exclusion & Timing**:
+     - `osal_mutex_create()`, `osal_mutex_lock(handle, timeoutMs)`, `osal_mutex_unlock()`
+     - `osal_delay_ms(uint32_t milliseconds)`
+     - `osal_get_time_ms(void)`: Return monotonic milliseconds elapsed since system boot.
+   - **Heap Memory (for USB Host Library)**:
+     - `osal_malloc(size_t size)`, `osal_free(void *ptr)`: Route to the RTOS byte pool or standard library heap.
+
+2. **`cfuture_sync_ops.c` (`external/cfuture/`)**:
+   - Implement the `cfuture_sync_ops_t` table linking `libcfuture`'s promise synchronization to the RTOS's native binary semaphore or event flag:
+     ```c
+     static bool sem_create(cfuture_sem_t *sem);
+     static void sem_destroy(cfuture_sem_t *sem);
+     static bool sem_wait(cfuture_sem_t *sem, uint32_t timeout_ms);
+     static void sem_post(cfuture_sem_t *sem);
+
+     const cfuture_sync_ops_t *cfuture_sync_ops_get(void);
+     ```
+
+3. **`board_led.c` (`app/include/led_device.h`)**:
+   - Implement `board_led_init(LedDevice *outDev)` binding `on`, `off`, and `toggle` function pointers to hardware GPIO controls.
+
+4. **`log_sink_impl.c` (`app/include/log_sink.h`)**:
+   - Implement `log_sink_init(LogSink *outSink)` binding the `write(const char *str, void *context)` function pointer to your platform UART or logging peripheral.
+
+5. **`time_source_impl.c` (`app/include/time_source.h`)**:
+   - Implement `time_source_init(TimeSource *outSource)` providing a monotonic millisecond time provider (`nowMs`).
+
+### Step 3: Implement Peripheral & Interrupt Glue
+
+- **USB Host Interrupt Handler (`usb_host_irq.c`)**:
+  Provide `usbHostIrqInit(void)` and `usbHostIrqDisable(void)`. Connect the MCU's `OTG_FS_IRQHandler` to the target's interrupt registration mechanism (e.g., `HAL_NVIC_SetPriority` + `HAL_NVIC_EnableIRQ`, or native RTOS IRQ dispatcher).
+- **CPU Exception Traps**:
+  If targeting Cortex-M hardware, forward `HardFault_Handler`, `MemManage_Handler`, `BusFault_Handler`, and `UsageFault_Handler` via naked assembly trampolines to `crashDumpFaultEntry(stackFrame)`.
+
+### Step 4: Wire the Target Composition Root
+
+Create `board_start_app.c` (or adapt `main.c`) to initialize the hardware, configure dependencies, and pass them to `appRun()`:
+
+```c
+#include "app.h"
+#include "board_led.h"
+#include "cfuture_sync_ops.h"
+#include "crash_dump.h"
+#include "log_sink_impl.h"
+#include "time_source_impl.h"
+#include "usbh_msc_disk.h"
+#include "usb_host.h"
+
+static PalStorage s_storage;
+
+void board_start_app(void)
+{
+    // 1. Arm independent hardware watchdog and fault vectors
+    crashDumpEarlyInit();
+
+    // 2. Build concrete dependency adapters
+    AppDependencies deps = {0};
+    board_led_init(&deps.led);
+    log_sink_init(&deps.logSink);
+    time_source_init(&deps.timeSource);
+    usbhMscDiskInit(&s_storage);
+    deps.storage = s_storage;
+    deps.cfutureSyncOps = cfuture_sync_ops_get();
+
+    // 3. Register background support tasks
+    deps.usbHostProcessEntry = usbHostProcessTaskEntry;
+    deps.usbHostProcessStackBytes = 4096U;
+    deps.watchdogTaskEntry = crashDumpWatchdogTaskEntry;
+    deps.watchdogTaskStackBytes = 2048U;
+
+    // 4. Start the application orchestration
+    appRun(&deps);
+}
+```
+
+### Step 5: Integrate into `build.py`
+
+Update `build.py` to recognize the new target:
+1. Add `<new_rtos>` to the `--target` CLI choices.
+2. Define `BUILD_DIR`, `ELF_PATH`, and `BIN_PATH` constants.
+3. Wire the compile command (`make` or `cmake --build`) into the dispatch dictionary.
+
+### Porting Checklist & Common Gotchas
+
+- **Stack Size Units**: `OsalTaskConfig.stackSizeBytes` is always specified in **bytes**. If your RTOS kernel expects stack depth in 32-bit words (such as native FreeRTOS `xTaskCreate`), ensure your `osal.c` divides by `sizeof(uint32_t)` to avoid allocating 4x larger stacks than requested.
+- **Bounded Synchronization**: Ensure `osal_queue_receive()` and `osal_mutex_lock()` correctly handle timeouts. Infinite blocking (`timeoutMs = 0xFFFFFFFF`) must not be used on loops monitored by `app_task_trace`, or the task will appear stalled and the watchdog supervisor will trigger a system reset.
+- **Pre-Scheduler Peripherals**: `usbhMscDiskInit()` configures USB Host structures; ensure hardware clocks and GPIO pins are initialized before calling it.
+- **Cooperative Exit Semantics**: `osal_task_exit()` must terminate the calling thread cleanly. In RTOSes where a thread cannot delete itself directly (such as ThreadX), invoke the appropriate terminate primitive (`tx_thread_terminate()`).
+
+---
+
+## 6. Hardware Specification & Electrical Wiring
 
 Testing and validation are performed on the **FK407M2-ZGT6** development board featuring the **STM32F407ZGT6** microcontroller.
 
@@ -339,7 +477,7 @@ Testing and validation are performed on the **FK407M2-ZGT6** development board f
 
 ---
 
-## 6. Repository Layout & File Taxonomy
+## 7. Repository Layout & File Taxonomy
 
 ```
 stm32f407-threadx/
@@ -415,7 +553,7 @@ stm32f407-threadx/
 
 ---
 
-## 7. Toolchain Setup & Build Guide
+## 8. Toolchain Setup & Build Guide
 
 ### Prerequisites
 
@@ -486,7 +624,7 @@ python3 build.py --target zephyr --build
 
 ---
 
-## 8. Diagnostics, Testing & Host Tooling
+## 9. Diagnostics, Testing & Host Tooling
 
 ### Real-Time UART Exception Decoder
 
@@ -562,7 +700,7 @@ If any task stalls or exceeds its deadline, the watchdog suppresses the hardware
 
 ---
 
-## 9. License
+## 10. License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 Third-party vendor libraries located in `external/` (Chan FatFS, ST HAL/USB, libcfuture) are governed by their respective licenses.
