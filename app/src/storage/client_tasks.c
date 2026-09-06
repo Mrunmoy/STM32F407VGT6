@@ -209,8 +209,8 @@ static void drainOccupyFuture(const ClientTaskConfig *config, const char *taskNa
 {
     appTaskTraceCheckpoint(taskName, "draining occupy request");
 
-    int32_t errorCode = kStorageErrorOk;
-    bool completed = cfuture_wait_for(occupyFuture, (uint32_t)kClientTaskOccupyDrainTimeoutMs, NULL, &errorCode);
+    int32_t occupyStatus = kStorageErrorOk;
+    bool completed = cfuture_wait_for(occupyFuture, (uint32_t)kClientTaskOccupyDrainTimeoutMs, NULL, &occupyStatus);
     if (!completed)
     {
         appTaskTraceCheckpoint(taskName, "T_S did not respond draining occupy request");
@@ -248,9 +248,9 @@ static void runHappyPathScenario(const ClientTaskConfig *config)
     }
 
     StorageResult writeResult;
-    int32_t writeError = kStorageErrorOk;
-    bool writeOk = cfuture_wait_for(&future, kClientTaskHappyWaitTimeoutMs, &writeResult, &writeError);
-    if (!writeOk || (writeError != kStorageErrorOk))
+    int32_t writeStatus = kStorageErrorOk;
+    bool writeOk = cfuture_wait_for(&future, kClientTaskHappyWaitTimeoutMs, &writeResult, &writeStatus);
+    if (!writeOk || (writeStatus != kStorageErrorOk))
     {
         logScenarioResult(config->logger, "scenario1", false, "write did not complete");
         return;
@@ -508,9 +508,9 @@ static void runAbaIsolationScenario(const ClientTaskConfig *config, const char *
     /* T_S is still occupied, so staleRequest cannot have been dequeued yet:
      * a 0ms poll times it out while its slot is still allocated - "still
      * in-flight" from the pool allocator's point of view. */
-    int32_t staleError = kStorageErrorOk;
-    bool staleCompleted = cfuture_wait_for(&staleFuture, kClientTaskPollTimeoutMs, NULL, &staleError);
-    bool staleTimedOut = (!staleCompleted) && (staleError == CFUTURE_ERR_TIMEOUT);
+    int32_t staleStatus = kStorageErrorOk;
+    bool staleCompleted = cfuture_wait_for(&staleFuture, kClientTaskPollTimeoutMs, NULL, &staleStatus);
+    bool staleTimedOut = (!staleCompleted) && (staleStatus == CFUTURE_ERR_TIMEOUT);
 
     /* A second, concurrent claim must land on a different slot and be able
      * to run to completion fully independently of the still-draining first

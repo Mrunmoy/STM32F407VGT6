@@ -31,6 +31,13 @@ typedef enum StorageCommandKind
     kStorageCommandGetStatus = 2,   /* query mount/ready state; result.ready is the answer */
 } StorageCommandKind;
 
+/* Fallback definitions for platforms/headers without full POSIX errno macros.
+ * Scoped under STORAGE_FALLBACK_ prefix to avoid polluting the global reserved errno namespace. */
+#define STORAGE_FALLBACK_ENODEV 19
+#define STORAGE_FALLBACK_EIO 5
+#define STORAGE_FALLBACK_EINVAL 22
+#define STORAGE_FALLBACK_ECANCELED 125
+
 /* App-defined status codes:
  * - kStorageErrorOk (0) is passed to cpromise_set_value() on success.
  * - Negative error codes are passed to cpromise_drop() on failure, and
@@ -39,10 +46,26 @@ typedef enum StorageCommandKind
 typedef enum StorageErrorCode
 {
     kStorageErrorOk = 0,
-    kStorageErrorNotReady = -19,       /* -ENODEV: PalStorage not mounted/ready */
-    kStorageErrorIoFailure = -5,        /* -EIO: PalStorage read/write/sync returned an error */
-    kStorageErrorInvalidBlock = -22,    /* -EINVAL: blockId/length out of range */
-    kStorageErrorCancelled = -125,      /* -ECANCELED: cpromise_is_active() was false; work was skipped */
+#if defined(ENODEV)
+    kStorageErrorNotReady = -ENODEV,       /* PalStorage not mounted/ready */
+#else
+    kStorageErrorNotReady = -STORAGE_FALLBACK_ENODEV,
+#endif
+#if defined(EIO)
+    kStorageErrorIoFailure = -EIO,        /* PalStorage read/write/sync returned an error */
+#else
+    kStorageErrorIoFailure = -STORAGE_FALLBACK_EIO,
+#endif
+#if defined(EINVAL)
+    kStorageErrorInvalidBlock = -EINVAL,    /* blockId/length out of range */
+#else
+    kStorageErrorInvalidBlock = -STORAGE_FALLBACK_EINVAL,
+#endif
+#if defined(ECANCELED)
+    kStorageErrorCancelled = -ECANCELED,      /* cpromise_is_active() was false; work was skipped */
+#else
+    kStorageErrorCancelled = -STORAGE_FALLBACK_ECANCELED,
+#endif
 } StorageErrorCode;
 
 /* Result payload copied into the caller's cfuture slot by
