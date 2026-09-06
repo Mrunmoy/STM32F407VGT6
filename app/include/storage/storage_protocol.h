@@ -35,15 +35,14 @@ typedef enum StorageCommandKind
  * - kStorageErrorOk (0) is passed to cpromise_set_value() on success.
  * - Negative error codes are passed to cpromise_drop() on failure, and
  *   retrieved via cfuture_wait_for's out_status.
- * Kept well clear of libcfuture's own CFUTURE_ERR_* range (-1..-6) so a caller
- * can always distinguish transport/framework errors from application failures. */
+ * Follows standard UNIX negative errno conventions (-ENODEV, -EIO, -EINVAL, -ECANCELED). */
 typedef enum StorageErrorCode
 {
     kStorageErrorOk = 0,
-    kStorageErrorNotReady = -100,      /* PalStorage not mounted/ready */
-    kStorageErrorIoFailure = -101,     /* PalStorage read/write/sync returned an error */
-    kStorageErrorInvalidBlock = -102,  /* blockId/length out of range */
-    kStorageErrorCancelled = -103,     /* cpromise_is_active() was false; work was skipped */
+    kStorageErrorNotReady = -19,       /* -ENODEV: PalStorage not mounted/ready */
+    kStorageErrorIoFailure = -5,        /* -EIO: PalStorage read/write/sync returned an error */
+    kStorageErrorInvalidBlock = -22,    /* -EINVAL: blockId/length out of range */
+    kStorageErrorCancelled = -125,      /* -ECANCELED: cpromise_is_active() was false; work was skipped */
 } StorageErrorCode;
 
 /* Result payload copied into the caller's cfuture slot by
