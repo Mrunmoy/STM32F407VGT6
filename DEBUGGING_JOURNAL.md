@@ -82,7 +82,7 @@ This document chronicles the real-world bugs, concurrency races, hardware edge c
   
   FreeRTOS had been configured with `USBH_USE_OS = 1`. In the generated startup code, `MX_USB_HOST_Init()` called `osThreadNew()` *before* `osKernelStart()`. In CMSIS-OS2 on FreeRTOS, creating threads prior to kernel initialization led to internal queue and lock deadlocks. ThreadX and Zephyr had already been using `USBH_USE_OS = 0` with a dedicated application pump task.
 - **Resolution & Verification**:
-  Switched FreeRTOS to `USBH_USE_OS = 0`. Unified the background polling logic into a single shared `usbHostProcessTaskEntry()` loop in `app/src/usb_host.c` across all three embedded targets, extracting only the NVIC IRQ enable into `os_glue/src/usb_host_irq.c`.
+  Switched FreeRTOS to `USBH_USE_OS = 0`. Unified the background polling logic into a single shared `usbHostProcessTaskEntry()` loop in `app/src/usb_host.c` across all three embedded targets, extracting only the NVIC IRQ enable into `pal/src/usb_host_irq.c`.
 
 ---
 
@@ -152,7 +152,7 @@ This document chronicles the real-world bugs, concurrency races, hardware edge c
 
 ### Case 09: RTC Time Source Register Coherency Race
 
-- **Component / Subsystem**: Hardware RTC adapter (`targets/freertos/os_glue/src/rtc_time_source.c`)
+- **Component / Subsystem**: Hardware RTC adapter (`targets/freertos/pal/src/rtc_time_source.c`)
 - **Target(s) Affected**: FreeRTOS (`targets/freertos/`)
 - **Symptom & Discovery Context**:
   Logging timestamps intermittently exhibited erratic jumps (e.g., jumping forward or backward by hours or days for a single log line).
@@ -165,7 +165,7 @@ This document chronicles the real-world bugs, concurrency races, hardware edge c
 
 ### Case 10: ThreadX Self-Termination vs Deletion Constraint
 
-- **Component / Subsystem**: Thread lifecycle management (`targets/threadx/os_glue/src/osal.c`)
+- **Component / Subsystem**: Thread lifecycle management (`targets/threadx/osal/src/osal.c`)
 - **Target(s) Affected**: Azure RTOS ThreadX (`targets/threadx/`)
 - **Symptom & Discovery Context**:
   Attempting to execute cooperative task teardown on ThreadX caused an immediate kernel return error (`TX_DELETE_ERROR`).
@@ -178,7 +178,7 @@ This document chronicles the real-world bugs, concurrency races, hardware edge c
 
 ### Case 11: POSIX pthread_exit() Memory Leak in Host OSAL
 
-- **Component / Subsystem**: Workstation OSAL implementation (`targets/host/os_glue/src/osal.c`)
+- **Component / Subsystem**: Workstation OSAL implementation (`targets/host/osal/src/osal.c`)
 - **Target(s) Affected**: Native POSIX Host (`targets/host/`)
 - **Symptom & Discovery Context**:
   Running the host test suite under Valgrind or AddressSanitizer (`-fsanitize=address`) reported memory leaks upon thread termination.
@@ -217,7 +217,7 @@ This document chronicles the real-world bugs, concurrency races, hardware edge c
 
 ### Case 14: Non-Uniform Hardware Indication on ThreadX
 
-- **Component / Subsystem**: Target board initialization and LED driver (`targets/threadx/os_glue/src/board_led.c`)
+- **Component / Subsystem**: Target board initialization and LED driver (`targets/threadx/pal/src/board_led.c`)
 - **Target(s) Affected**: Azure RTOS ThreadX (`targets/threadx/`)
 - **Symptom & Discovery Context**:
   ThreadX exhibited a distinct "airplane strobe" (double flash pause) on the user LED that was absent on other targets, and did not respond to cooperative stop commands.

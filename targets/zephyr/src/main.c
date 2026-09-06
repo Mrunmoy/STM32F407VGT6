@@ -23,7 +23,7 @@ int main(void)
     /* First thing, before anything else can fault: route MemManage/Bus/
      * UsageFault to their own handlers and arm the independent watchdog -
      * see crash_dump.h's own doc comment. Zephyr's own fault path
-     * (k_sys_fatal_error_handler(), os_glue/src/crash_dump_zephyr.c) still
+     * (k_sys_fatal_error_handler(), pal/src/crash_dump_zephyr.c) still
      * gets first look at any fault regardless; this only affects the raw
      * CPU vector routing / watchdog arming, both boot-time, both orthogonal
      * to that. */

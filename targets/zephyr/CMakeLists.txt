@@ -5,16 +5,17 @@ project(fk407m2_blinky_uart_usbh_msc)
 
 # This app links the SAME shared app/ + external/ sources (two levels up,
 # repo root) as the host/freertos/threadx targets - only this directory's
-# own os_glue/ (concrete adapters: osal.c, cfuture_sync_ops.c, log_sink_impl.c,
-# time_source_impl.c, board_led.c, usb_host_irq.c) and src/main.c
-# (composition root) are Zephyr-specific. usb_host.c/usbh_conf.c used to be
-# a near-duplicate per target too; they're shared app/ sources now - only
-# IRQ registration (usb_host_irq.c) and the heap (osal.c's
+# own concrete adapters (OSAL: osal.c, cfuture_sync_ops.c; PAL: log_sink_impl.c,
+# time_source_impl.c, board_led.c, usb_host_irq.c, hal_shim.c, crash_dump_zephyr.c)
+# and src/main.c (composition root) are Zephyr-specific. usb_host.c/usbh_conf.c
+# used to be a near-duplicate per target too; they're shared app/ sources now -
+# only IRQ registration (usb_host_irq.c) and the heap (osal.c's
 # osal_malloc()/osal_free()) still differ per platform.
 set(APP_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../..)
 set(SHARED_APP_DIR ${APP_ROOT}/app)
 set(SHARED_EXTERNAL_DIR ${APP_ROOT}/external)
-set(OS_GLUE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/os_glue)
+set(OSAL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/osal)
+set(PAL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/pal)
 
 # Zephyr's own hal_stm32 module vendors this SoC's HAL/LL sources but only
 # compiles the subset its own drivers reference (see CLAUDE.md for why). We
@@ -24,30 +25,30 @@ set(HAL_STM32_F4XX_DIR $ENV{ZEPHYR_BASE}/../modules/hal/stm32/stm32cube/stm32f4x
 
 target_sources(app PRIVATE
     src/main.c
-    os_glue/src/board_led.c
-    os_glue/src/osal.c
-    os_glue/src/cfuture_sync_ops.c
-    os_glue/src/log_sink_impl.c
-    os_glue/src/time_source_impl.c
-    os_glue/src/hal_shim.c
-    os_glue/src/usb_host_irq.c
-    os_glue/src/crash_dump_zephyr.c
+    osal/src/osal.c
+    osal/src/cfuture_sync_ops.c
+    pal/src/board_led.c
+    pal/src/log_sink_impl.c
+    pal/src/time_source_impl.c
+    pal/src/hal_shim.c
+    pal/src/usb_host_irq.c
+    pal/src/crash_dump_zephyr.c
 
     # Shared OS-agnostic application layer (identical across every target)
-    ${SHARED_APP_DIR}/src/app.c
-    ${SHARED_APP_DIR}/src/app_threads.c
-    ${SHARED_APP_DIR}/src/app_task_trace.c
-    ${SHARED_APP_DIR}/src/blinky_task.c
-    ${SHARED_APP_DIR}/src/logger.c
-    ${SHARED_APP_DIR}/src/storage_service.c
-    ${SHARED_APP_DIR}/src/client_tasks.c
-    ${SHARED_APP_DIR}/src/storage_demo.c
-    ${SHARED_APP_DIR}/src/fatfs_diskio.c
-    ${SHARED_APP_DIR}/src/fatfs_time.c
-    ${SHARED_APP_DIR}/src/usbh_msc_disk.c
-    ${SHARED_APP_DIR}/src/usb_host.c
-    ${SHARED_APP_DIR}/src/usbh_conf.c
-    ${SHARED_APP_DIR}/src/crash_dump.c
+    ${SHARED_APP_DIR}/src/core/app.c
+    ${SHARED_APP_DIR}/src/core/app_threads.c
+    ${SHARED_APP_DIR}/src/core/logger.c
+    ${SHARED_APP_DIR}/src/diagnostics/app_task_trace.c
+    ${SHARED_APP_DIR}/src/diagnostics/blinky_task.c
+    ${SHARED_APP_DIR}/src/diagnostics/crash_dump.c
+    ${SHARED_APP_DIR}/src/storage/storage_service.c
+    ${SHARED_APP_DIR}/src/storage/client_tasks.c
+    ${SHARED_APP_DIR}/src/storage/storage_demo.c
+    ${SHARED_APP_DIR}/src/storage/fatfs_diskio.c
+    ${SHARED_APP_DIR}/src/storage/fatfs_time.c
+    ${SHARED_APP_DIR}/src/usb/usbh_msc_disk.c
+    ${SHARED_APP_DIR}/src/usb/usb_host.c
+    ${SHARED_APP_DIR}/src/usb/usbh_conf.c
 
     # Vendored ST HAL (HCD + GPIO + Cortex/NVIC - see CLAUDE.md)
     ${HAL_STM32_F4XX_DIR}/drivers/src/stm32f4xx_hal_hcd.c
@@ -70,11 +71,19 @@ target_sources(app PRIVATE
 
     # Shared vendored libcfuture
     ${SHARED_EXTERNAL_DIR}/cfuture/src/cfuture.c
+    ${SHARED_EXTERNAL_DIR}/cfuture/src/cfuture_pal.c
 )
 
 target_include_directories(app PRIVATE
-    ${OS_GLUE_DIR}/include
+    ${OSAL_DIR}/include
+    ${PAL_DIR}/include
     ${SHARED_APP_DIR}/include
+    ${SHARED_APP_DIR}/include/osal
+    ${SHARED_APP_DIR}/include/pal
+    ${SHARED_APP_DIR}/include/core
+    ${SHARED_APP_DIR}/include/diagnostics
+    ${SHARED_APP_DIR}/include/storage
+    ${SHARED_APP_DIR}/include/usb
     ${SHARED_EXTERNAL_DIR}/cfuture/include
     ${SHARED_EXTERNAL_DIR}/fatfs
     ${SHARED_EXTERNAL_DIR}/fatfs/src

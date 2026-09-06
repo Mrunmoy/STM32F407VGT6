@@ -29,11 +29,11 @@ The showcase workload implements an asynchronous, lock-free USB Host Mass Storag
   - [Reliability, Hardware Watchdog & Fault Telemetry](#reliability-hardware-watchdog--fault-telemetry)
 - [4. Target Abstraction & Support Matrix](#4-target-abstraction--support-matrix)
   - [Target Platform Comparison Matrix](#target-platform-comparison-matrix)
-  - [The Uniform `os_glue/` Architecture](#the-uniform-os_glue-architecture)
+  - [The Clean OSAL & PAL Tier Architecture](#the-clean-osal--pal-tier-architecture)
   - [Target Bring-Up Flow](#target-bring-up-flow)
 - [5. Porting Guide: Adding a New RTOS Target](#5-porting-guide-adding-a-new-rtos-target)
   - [Step 1: Scaffold Target Directory Layout](#step-1-scaffold-target-directory-layout)
-  - [Step 2: Implement the Canonical `os_glue` Interfaces](#step-2-implement-the-canonical-os_glue-interfaces)
+  - [Step 2: Implement the Canonical OSAL and PAL Interfaces](#step-2-implement-the-canonical-osal-and-pal-interfaces)
   - [Step 3: Implement Peripheral & Interrupt Glue](#step-3-implement-peripheral--interrupt-glue)
   - [Step 4: Wire the Target Composition Root](#step-4-wire-the-target-composition-root)
   - [Step 5: Integrate into `build.py`](#step-5-integrate-into-buildpy)
@@ -81,15 +81,20 @@ The system follows a strict 6-tier layered architecture, enforcing unidirectiona
 │  Task Trace & Profiler Engine    │ Crash Dump & Watchdog Supervisor Task    │
 │  Logger Subsystem                │ Blinky Heartbeat Task                    │
 ├─────────────────────────────────────────────────────────────────────────────┤
-│                 LAYER 3: PLATFORM & OS ABSTRACTION INTERFACES               │
-│  osal.h (Tasks, Queues, Delays)  │ pal_storage.h (Block Storage Interface)  │
-│  time_source.h (Monotonic Clock) │ log_sink.h (Character Stream Output)     │
-│  led_device.h (Binary Indication)│ cfuture_sync_ops_t (Future Sync Primitives)│
+│                 LAYER 3: OSAL & PAL INTERFACE CONTRACTS                     │
+│  OSAL Interfaces:                │ PAL Interfaces:                          │
+│   osal.h (Tasks, Queues, Mutex)  │  pal_storage.h (Block Storage Device)    │
+│   cfuture_sync_ops_t (Async OS)  │  time_source.h (Monotonic Clock Provider)│
+│                                  │  log_sink.h (Character Stream Output)    │
+│                                  │  led_device.h (Physical Binary State)    │
 ├─────────────────────────────────────────────────────────────────────────────┤
-│                 LAYER 4: TARGET ADAPTERS & GLUE (os_glue/)                  │
-│              [Uniform 5-file implementation contract per target]            │
-│   osal.c  │  board_led.c  │  log_sink_impl.c  │  time_source_impl.c         │
-│   cfuture_sync_ops.c      │  usb_host_irq.c   │  board_start_app.c (Root)   │
+│                 LAYER 4: TARGET OSAL & PAL ADAPTERS                         │
+│  targets/<target>/osal/          │ targets/<target>/pal/                    │
+│   osal.c (Tasks, Queues, Mutex)  │  board_led.c (GPIO Pin Driver)           │
+│   cfuture_sync_ops.c (Sync Ops)  │  log_sink_impl.c (Console / UART Driver) │
+│                                  │  time_source_impl.c (Monotonic Clock)    │
+│                                  │  pal_host_disk.c (Host RAM Disk)         │
+│                                  │  usb_host_irq.c / board_start_app.c      │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                 LAYER 5: VENDOR MIDDLEWARE & RTOS PLATFORMS                 │
 │  FreeRTOS Kernel (CMSIS-OS2) │ Azure RTOS ThreadX   │ Zephyr RTOS Kernel    │
@@ -106,7 +111,7 @@ The system follows a strict 6-tier layered architecture, enforcing unidirectiona
 ### Core Design Principles
 
 #### 1. Inversion of Control & Composition Root in Pure C
-Application logic never discovers or instantiates its own dependencies. Each target implements a thin **Composition Root** (`targets/*/os_glue/board_start_app.c` on embedded targets, `main.c` on Host/Zephyr). 
+Application logic never discovers or instantiates its own dependencies. Each target implements a thin **Composition Root** (`targets/*/pal/src/board_start_app.c` on embedded targets, `main.c` on Host/Zephyr). 
 
 The composition root instantiates concrete adapters conforming to Layer 3 interfaces, packages them into an immutable `AppDependencies` aggregate, and passes it to `appRun()`:
 
@@ -264,26 +269,43 @@ graph TD
 | **Fault Interception** | POSIX Signals (SIGSEGV) | Naked ASM Trampoline | Naked ASM Trampoline | `k_sys_fatal_error_handler` |
 | **Flashing & Debug** | Direct Executable Run | SEGGER J-Link SWD | SEGGER J-Link SWD | SEGGER J-Link SWD |
 
-### The Uniform `os_glue/` Architecture
+### The Clean OSAL & PAL Tier Architecture
 
-To prevent architectural drift, every target maintains identical directory layouts and implements the same five canonical filenames:
+To prevent architectural drift and eliminate "grab-bag" glue directories, target adapters are partitioned into two strictly separated subdirectories:
+- **`osal/` (Operating System Abstraction Layer)**: abstracts RTOS kernel primitives (threads, queues, mutexes, delays, thread exit, heap memory, and `cfuture` event synchronization). Contains zero knowledge of board hardware, GPIOs, or peripherals.
+- **`pal/` (Platform Abstraction Layer)**: abstracts board hardware, GPIO pins, UART log sinks, monotonic hardware clocks/RTC, storage devices, and USB IRQ routing. Contains zero direct dependencies on RTOS kernel symbols.
 
 ```
-targets/<target_name>/os_glue/
-├── include/
-│   ├── board_led.h           # Concrete LED driver header
-│   ├── cfuture_sync_ops.h    # Promise synchronization header
-│   ├── log_sink_impl.h       # Target console sink header
-│   └── time_source_impl.h    # Target monotonic clock header
-└── src/
-    ├── board_led.c           # Concrete implementation (GPIO or stdout)
-    ├── cfuture_sync_ops.c    # Target binary semaphore / event flag adapter
-    ├── log_sink_impl.c       # Concrete UART / stdout sink driver
-    ├── osal.c                # Full OSAL implementation for this target
-    └── time_source_impl.c    # Concrete clock implementation
+targets/<target_name>/
+├── osal/
+│   ├── include/
+│   │   ├── cfuture_sync_ops.h    # Promise synchronization operations header
+│   │   └── osal_byte_pool.h      # (ThreadX only) Byte pool memory header
+│   └── src/
+│       ├── osal.c                # Full OSAL implementation (tasks, queues, mutexes, heap)
+│       └── cfuture_sync_ops.c    # Target binary semaphore / event flag adapter for libcfuture
+└── pal/
+    ├── include/
+    │   ├── board_led.h           # Concrete LED driver header
+    │   ├── board_start_app.h     # Target board boot & composition root header
+    │   ├── log_sink_impl.h       # Target console sink header
+    │   ├── pal_host_disk.h       # (Host only) RAM disk block driver header
+    │   ├── rtc_time_source.h     # (FreeRTOS only) Hardware RTC time source header
+    │   ├── stm32f4xx_hal_conf.h  # (Zephyr only) ST HAL configuration
+    │   └── time_source_impl.h    # Target monotonic clock header
+    └── src/
+        ├── board_led.c           # Concrete LED implementation (GPIO or stdout)
+        ├── board_start_app.c     # Target board bringup & dependency injection
+        ├── log_sink_impl.c       # Concrete UART / stdout sink driver
+        ├── pal_host_disk.c       # (Host only) In-memory RAM disk block driver
+        ├── rtc_time_source.c     # (FreeRTOS only) Hardware RTC time source
+        ├── time_source_impl.c    # Concrete clock implementation
+        ├── usb_host_irq.c        # USB OTG FS IRQ routing (embedded targets)
+        ├── hal_shim.c            # (Zephyr only) Hardware abstraction shim
+        └── crash_dump_zephyr.c   # (Zephyr only) Kernel fatal error handler
 ```
 
-Grepping for any adapter filename (e.g., `osal.c` or `board_led.c`) finds all four target implementations at the identical relative path. Target-specific extras (e.g., `rtc_time_source.c` on FreeRTOS, `osal_byte_pool.h` on ThreadX, or `hal_shim.c` on Zephyr) exist alongside the standard five without disguising their purpose.
+Grepping for any OSAL or PAL adapter finds all target implementations at clean, consistent paths across every supported platform.
 
 ### Target Bring-Up Flow
 
@@ -324,33 +346,37 @@ Porting this architecture to a new RTOS (e.g., **RT-Thread**, **SEGGER embOS**, 
 
 ### Step 1: Scaffold Target Directory Layout
 
-Create a new directory `targets/<new_rtos>/` mirroring the uniform repository structure:
+Create a new directory `targets/<new_rtos>/` mirroring the two-tier OSAL/PAL layout:
 
 ```text
 targets/<new_rtos>/
-├── os_glue/
+├── osal/
+│   ├── include/
+│   │   └── cfuture_sync_ops.h   # Synchronization operations header
+│   └── src/
+│       ├── osal.c               # Full OSAL implementation
+│       └── cfuture_sync_ops.c   # Binary semaphore/event flag adapter for libcfuture
+├── pal/
 │   ├── include/
 │   │   ├── board_led.h          # LED device init
-│   │   ├── cfuture_sync_ops.h   # Synchronization operations header
+│   │   ├── board_start_app.h    # Composition root
 │   │   ├── log_sink_impl.h      # Log sink init
 │   │   └── time_source_impl.h   # Time source init
 │   └── src/
 │       ├── board_led.c          # Concrete LED driver
-│       ├── cfuture_sync_ops.c   # Binary semaphore adapter for libcfuture
+│       ├── board_start_app.c    # Composition root & dependency setup
 │       ├── log_sink_impl.c      # Concrete UART character stream driver
-│       ├── osal.c               # Full OSAL implementation
 │       ├── time_source_impl.c   # Monotonic clock driver
-│       ├── usb_host_irq.c       # USB OTG FS IRQ routing (if on STM32)
-│       └── board_start_app.c   # Composition root
+│       └── usb_host_irq.c       # USB OTG FS IRQ routing (if on STM32)
 ├── Makefile                     # Or CMakeLists.txt
 └── Core/, Middlewares/          # Kernel source and startup code
 ```
 
-### Step 2: Implement the Canonical `os_glue` Interfaces
+### Step 2: Implement the Canonical OSAL and PAL Interfaces
 
-Implement the five standard contracts in `targets/<new_rtos>/os_glue/src/`:
+Implement the contracts in `targets/<new_rtos>/osal/src/` and `targets/<new_rtos>/pal/src/`:
 
-1. **`osal.c` (`app/include/osal.h`)**:
+1. **`osal.c` (`app/include/osal/osal.h`)**:
    - **Task Management**:
      - `osal_task_create(const OsalTaskConfig *config, OsalTaskHandle *outHandle)`: Translate `OsalTaskConfig` (name, entry, context, stack size in bytes, priority) into native kernel thread creation.
      - `osal_task_exit(void)`: Terminate the calling thread cleanly (must never return).
@@ -376,14 +402,14 @@ Implement the five standard contracts in `targets/<new_rtos>/os_glue/src/`:
      const cfuture_sync_ops_t *cfuture_sync_ops_get(void);
      ```
 
-3. **`board_led.c` (`app/include/led_device.h`)**:
-   - Implement `board_led_init(LedDevice *outDev)` binding `on`, `off`, and `toggle` function pointers to hardware GPIO controls.
+3. **`board_led.c` (`app/include/pal/pal_led.h`)**:
+   - Implement `board_led_init(PalLed *outDev)` binding `on`, `off`, and `toggle` function pointers to hardware GPIO controls.
 
-4. **`log_sink_impl.c` (`app/include/log_sink.h`)**:
-   - Implement `log_sink_init(LogSink *outSink)` binding the `write(const char *str, void *context)` function pointer to your platform UART or logging peripheral.
+4. **`log_sink_impl.c` (`app/include/pal/pal_log_sink.h`)**:
+   - Implement `log_sink_init(PalLogSink *outSink)` binding the `write(const char *str, void *context)` function pointer to your platform UART or logging peripheral.
 
-5. **`time_source_impl.c` (`app/include/time_source.h`)**:
-   - Implement `time_source_init(TimeSource *outSource)` providing a monotonic millisecond time provider (`nowMs`).
+5. **`time_source_impl.c` (`app/include/pal/pal_time.h`)**:
+   - Implement `time_source_init(PalTimeSource *outSource)` providing a monotonic millisecond time provider (`nowMs`).
 
 ### Step 3: Implement Peripheral & Interrupt Glue
 
@@ -482,42 +508,53 @@ Testing and validation are performed on the **FK407M2-ZGT6** development board f
 ```
 stm32f407-threadx/
 ├── app/                               # Shared, OS-agnostic application core (Single Copy)
-│   ├── include/
-│   │   ├── app.h                      # AppDependencies aggregate & appRun() declaration
-│   │   ├── app_task_trace.h           # Lock-free task telemetry and supervision interfaces
-│   │   ├── app_threads.h              # Central AppThreadRegistry table interface
-│   │   ├── blinky_task.h              # Diagnostic heartbeat task
-│   │   ├── client_tasks.h             # The 4 libcfuture concurrency test scenarios
-│   │   ├── crash_dump.h               # Bare-metal CPU exception handler & IWDG watchdog
-│   │   ├── fatfs_diskio.h             # Chan FatFS disk I/O driver binding
-│   │   ├── fatfs_time.h               # FAT timestamp provider interface
-│   │   ├── led_device.h               # Abstract LED control interface
-│   │   ├── log_level.h / log_sink.h   # Logging severity and sink abstraction
-│   │   ├── logger.h                   # Structured logger engine
-│   │   ├── osal.h                     # Operating System Abstraction Layer interface
-│   │   ├── pal_storage.h              # Platform Block Storage abstraction interface
-│   │   ├── storage_demo.h             # Storage subsystem registration entry
-│   │   ├── storage_protocol.h         # Storage request/result message payload types
-│   │   ├── storage_service.h          # Storage service worker task
-│   │   ├── time_source.h              # Monotonic timebase interface
-│   │   ├── usb_host.h                 # USB Host process entry and peripheral handles
-│   │   ├── usbh_conf.h                # USB Host low-level configuration interface
-│   │   └── usbh_msc_disk.h            # PalStorage adapter backed by USB Host MSC
-│   └── src/
-│       ├── app.c                      # Composition orchestrator: registers & starts all tasks
-│       ├── app_task_trace.c           # Turnaround, cadence, and checkpoint tracking engine
-│       ├── app_threads.c              # Sole invocation point for osal_task_create()
-│       ├── blinky_task.c              # Heartbeat implementation
-│       ├── client_tasks.c             # Concurrency test scenario implementations
-│       ├── crash_dump.c               # Naked register capture, raw UART dump, IWDG task
-│       ├── fatfs_diskio.c             # FatFS to PalStorage bridge
-│       ├── fatfs_time.c               # FAT file timestamp binding
-│       ├── logger.c                   # Timestamped string formatting engine
-│       ├── storage_demo.c             # Queue allocation, promise pool init, task registration
-│       ├── storage_service.c          # Worker task executing filesystem transactions
-│       ├── usb_host.c                 # USB Host background processing state machine
-│       ├── usbh_conf.c                # ST USB Host low-level driver glue
-│       └── usbh_msc_disk.c            # PalStorage block driver over USB Host MSC
+│   ├── include/                       # Public abstract interfaces & subsystem contracts
+│   │   ├── osal/                      # Operating System Abstraction Layer interface
+│   │   │   └── osal.h                 # Pure OS interface (tasks, queues, mutexes, delay, heap)
+│   │   ├── pal/                       # Platform Abstraction Layer interfaces
+│   │   │   ├── pal_storage.h          # Abstract Block Storage device contract
+│   │   │   ├── pal_led.h              # Abstract LED hardware contract (PalLed / LedDevice)
+│   │   │   ├── pal_time.h             # Abstract monotonic clock / calendar contract (PalTimeSource / TimeSource)
+│   │   │   └── pal_log_sink.h         # Abstract console stream sink contract (PalLogSink / LogSink)
+│   │   ├── core/                      # Application composition, thread registry & logging
+│   │   │   ├── app.h                  # AppDependencies aggregate & appRun() declaration
+│   │   │   ├── app_threads.h          # Central AppThreadRegistry table interface
+│   │   │   ├── logger.h               # Structured logger engine
+│   │   │   └── log_level.h            # Logging severity enumeration
+│   │   ├── diagnostics/               # Observability & health monitoring
+│   │   │   ├── app_task_trace.h       # Lock-free task telemetry and supervision interfaces
+│   │   │   ├── crash_dump.h           # Bare-metal CPU exception handler & IWDG watchdog
+│   │   │   └── blinky_task.h          # Diagnostic heartbeat task
+│   │   ├── storage/                   # Asynchronous storage service & showcase client tasks
+│   │   │   ├── storage_service.h      # Storage service worker task
+│   │   │   ├── storage_protocol.h     # Storage request/result message payload types
+│   │   │   ├── storage_demo.h         # Storage subsystem registration entry
+│   │   │   ├── client_tasks.h         # The 4 libcfuture concurrency test scenarios
+│   │   │   ├── fatfs_diskio.h         # Chan FatFS disk I/O driver binding
+│   │   │   └── fatfs_time.h           # FAT timestamp provider interface
+│   │   └── usb/                       # USB Host Mass Storage driver & configuration
+│   │       ├── usb_host.h             # USB Host process entry and peripheral handles
+│   │       ├── usbh_conf.h            # USB Host low-level configuration interface
+│   │       └── usbh_msc_disk.h        # PalStorage adapter backed by USB Host MSC
+│   └── src/                           # Subsystem source implementations
+│       ├── core/                      # Application core orchestration
+│       │   ├── app.c                  # Composition orchestrator: registers & starts all tasks
+│       │   ├── app_threads.c          # Sole invocation point for osal_task_create()
+│       │   └── logger.c               # Timestamped string formatting engine
+│       ├── diagnostics/               # Diagnostic & health supervision
+│       │   ├── app_task_trace.c       # Turnaround, cadence, and checkpoint tracking engine
+│       │   ├── crash_dump.c           # Naked register capture, raw UART dump, IWDG task
+│       │   └── blinky_task.c          # Heartbeat implementation
+│       ├── storage/                   # Storage pipeline
+│       │   ├── storage_service.c      # Worker task executing filesystem transactions
+│       │   ├── storage_demo.c         # Queue allocation, promise pool init, task registration
+│       │   ├── client_tasks.c         # Concurrency test scenario implementations
+│       │   ├── fatfs_diskio.c         # FatFS to PalStorage bridge
+│       │   └── fatfs_time.c           # FAT file timestamp binding
+│       └── usb/                       # USB Host MSC driver
+│           ├── usb_host.c             # USB Host background processing state machine
+│           ├── usbh_conf.c            # ST USB Host low-level driver glue
+│           └── usbh_msc_disk.c        # PalStorage block driver over USB Host MSC
 ├── external/                          # Vendored third-party code (Plain vendored, no submodules)
 │   ├── cfuture/                       # libcfuture: Zero-heap lock-free promise/future library
 │   ├── fatfs/                         # Chan's FatFS R0.15 filesystem library
@@ -527,23 +564,26 @@ stm32f407-threadx/
 ├── targets/                           # Platform-specific targets and concrete adapters
 │   ├── host/                          # Native POSIX / Workstation target
 │   │   ├── main.c                     # Host composition root
-│   │   ├── pal_host_disk.c/.h         # In-memory RAM disk block driver
-│   │   └── os_glue/                   # Host implementations of the 5 canonical adapters
+│   │   ├── osal/                      # Host OSAL (pthreads, monotonic clock, cfuture sync)
+│   │   └── pal/                       # Host PAL (in-memory RAM disk, stdout console sink)
 │   ├── freertos/                      # FreeRTOS V10 (CMSIS-RTOS2) STM32 target
 │   │   ├── Core/                      # CubeMX startup, clock config, interrupt vectors
 │   │   ├── Middlewares/               # FreeRTOS kernel source and CMSIS-OS2 layer
 │   │   ├── Makefile.freertos          # GNU Make build definition
-│   │   └── os_glue/                   # FreeRTOS implementations of the 5 canonical adapters
+│   │   ├── osal/                      # FreeRTOS OSAL (tasks, queues, mutexes, semaphores)
+│   │   └── pal/                       # FreeRTOS PAL (GPIO LED, UART sink, RTC, USB IRQ)
 │   ├── threadx/                       # Azure RTOS ThreadX STM32 target
 │   │   ├── AZURE_RTOS/                # ThreadX kernel source and architecture ports
 │   │   ├── Core/                      # CubeMX startup, clock config, interrupt vectors
 │   │   ├── Makefile                   # GNU Make build definition
-│   │   └── os_glue/                   # ThreadX implementations of the 5 canonical adapters
+│   │   ├── osal/                      # ThreadX OSAL (threads, byte pool, event flags)
+│   │   └── pal/                       # ThreadX PAL (GPIO LED, UART sink, USB IRQ)
 │   └── zephyr/                        # Zephyr RTOS T2 freestanding application
 │       ├── boards/                    # Devicetree overlay for FK407M2 pinout retargeting
 │       ├── prj.conf                   # Zephyr Kconfig configuration
 │       ├── src/main.c                 # Zephyr composition root
-│       └── os_glue/                   # Zephyr implementations of the 5 canonical adapters
+│       ├── osal/                      # Zephyr OSAL (k_thread, k_msgq, k_mutex, k_event)
+│       └── pal/                       # Zephyr PAL (GPIO LED, UART sink, USB IRQ, HAL shim)
 ├── tools/                             # Developer CLI and diagnostic host tools
 │   ├── _toolchain.py                  # Automatic ARM GCC and host toolchain discovery
 │   └── serial_monitor.py              # Real-time UART monitor with live addr2line fault decoding

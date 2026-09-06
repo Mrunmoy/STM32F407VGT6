@@ -36,7 +36,11 @@ enable_testing()
 
 add_executable(test_logger
     tests/test_logger.c
-    app/src/logger.c
+    app/src/core/logger.c
 )
-target_include_directories(test_logger PRIVATE app/include)
+target_include_directories(test_logger PRIVATE
+    app/include
+    app/include/core
+    app/include/pal
+)
 add_test(NAME test_logger COMMAND test_logger)

@@ -1,7 +1,7 @@
 # ── STM32F407 + FreeRTOS/USBH/FatFS — command-line build ──────────────────
 # Produces Debug/stm32f407.{elf,hex,bin}. This target links three kinds of
 # source: this directory's own FreeRTOS-target files (Core/,
-# Middlewares/Third_Party/FreeRTOS, os_glue/), the shared OS-agnostic
+# Middlewares/Third_Party/FreeRTOS, osal/, pal/), the shared OS-agnostic
 # application layer at ../../app (identical across all RTOS targets and the
 # host build), and shared vendor libs at ../../external (the STM32 HAL/CMSIS,
 # FatFS, ST's USB Host library, libcfuture - see ../../external/stm32f4xx_hal
@@ -59,8 +59,15 @@ EXTERNAL_DIR = ../../external
 # ── Include paths ─────────────────────────────────────────────────────────
 C_INCLUDES = \
   -ICore/Inc \
-  -Ios_glue/include \
+  -Iosal/include \
+  -Ipal/include \
   -I$(APP_DIR)/include \
+  -I$(APP_DIR)/include/osal \
+  -I$(APP_DIR)/include/pal \
+  -I$(APP_DIR)/include/core \
+  -I$(APP_DIR)/include/diagnostics \
+  -I$(APP_DIR)/include/storage \
+  -I$(APP_DIR)/include/usb \
   -I$(EXTERNAL_DIR)/stm32f4xx_hal/STM32F4xx_HAL_Driver/Inc \
   -I$(EXTERNAL_DIR)/stm32f4xx_hal/STM32F4xx_HAL_Driver/Inc/Legacy \
   -I$(EXTERNAL_DIR)/stm32f4xx_hal/CMSIS/Device/ST/STM32F4xx/Include \
@@ -77,26 +84,28 @@ C_INCLUDES = \
 # ── Sources ───────────────────────────────────────────────────────────────
 # FatFS: exclude diskio.c (FatFS's own generic disk_read/disk_write/...
 # template) and ff_gen_drv.c (ST's alternate Diskio_drvTypeDef indirection
-# layer) - neither is used. app/src/fatfs_diskio.c implements Chan's raw
+# layer) - neither is used. app/src/storage/fatfs_diskio.c implements Chan's raw
 # diskio.h contract directly on top of PalStorage; compiling the vendor
 # diskio.c alongside it would fail to link with duplicate disk_* symbols.
 FATFS_SOURCES = $(filter-out %/diskio.c %/ff_gen_drv.c,$(wildcard $(EXTERNAL_DIR)/fatfs/src/*.c))
 
-# libcfuture: always compile the core (cfuture.c) plus whatever OSAL sync
-# adapter(s) live under src/adapters EXCEPT cfuture_posix.c (pthread/POSIX
-# only, no bare-metal ARM build) and cfuture_win32.c (Windows-only) - this
-# target's own cfuture_sync_ops.c (os_glue/src/) is the real sync_ops
-# provider, so no adapter from external/cfuture/src/adapters is actually
-# needed today; the filtered wildcard is kept so a future portable adapter
-# there gets picked up automatically without touching this Makefile again.
+# libcfuture: always compile the core (cfuture.c + cfuture_pal.c) plus
+# whatever OSAL sync adapter(s) live under src/adapters EXCEPT cfuture_posix.c
+# (pthread/POSIX only, no bare-metal ARM build) and cfuture_win32.c
+# (Windows-only) - this target's own cfuture_sync_ops.c (osal/src/) is the real
+# sync_ops provider, so no adapter from external/cfuture/src/adapters is
+# actually needed today; the filtered wildcard is kept so a future portable
+# adapter there gets picked up automatically without touching this Makefile again.
 CFUTURE_SOURCES = \
   $(EXTERNAL_DIR)/cfuture/src/cfuture.c \
+  $(EXTERNAL_DIR)/cfuture/src/cfuture_pal.c \
   $(filter-out %_posix.c %_win32.c,$(wildcard $(EXTERNAL_DIR)/cfuture/src/adapters/*.c))
 
 C_SOURCES = \
   $(wildcard Core/Src/*.c) \
-  $(wildcard os_glue/src/*.c) \
-  $(wildcard $(APP_DIR)/src/*.c) \
+  $(wildcard osal/src/*.c) \
+  $(wildcard pal/src/*.c) \
+  $(wildcard $(APP_DIR)/src/*/*.c) \
   $(wildcard $(EXTERNAL_DIR)/gcc_newlib_stubs/*.c) \
   $(EXTERNAL_DIR)/stm32f4xx_hal/CMSIS/Device/ST/STM32F4xx/Source/Templates/system_stm32f4xx.c \
   $(wildcard $(EXTERNAL_DIR)/stm32f4xx_hal/STM32F4xx_HAL_Driver/Src/*.c) \

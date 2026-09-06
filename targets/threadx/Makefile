@@ -2,7 +2,7 @@
 # Targets an STM32F407xG (VGT6 / ZGT6, both pin/memory compatible).
 # Produces Debug/stm32f407.{elf,hex,bin}. Links this directory's own
 # ThreadX-target files (Core/, AZURE_RTOS/, Middlewares/ST/threadx,
-# os_glue/) plus the shared OS-agnostic application layer at
+# osal/, pal/) plus the shared OS-agnostic application layer at
 # ../../app (identical across all RTOS targets and the host build) and
 # shared vendor libs at ../../external (the STM32 HAL/CMSIS, FatFS, ST's USB
 # Host library, libcfuture).
@@ -57,8 +57,15 @@ EXTERNAL_DIR = ../../external
 # ── Include paths ─────────────────────────────────────────────────────────
 C_INCLUDES = \
   -ICore/Inc \
-  -Ios_glue/include \
+  -Iosal/include \
+  -Ipal/include \
   -I$(APP_DIR)/include \
+  -I$(APP_DIR)/include/osal \
+  -I$(APP_DIR)/include/pal \
+  -I$(APP_DIR)/include/core \
+  -I$(APP_DIR)/include/diagnostics \
+  -I$(APP_DIR)/include/storage \
+  -I$(APP_DIR)/include/usb \
   -ICore/ThreadSafe \
   -IAZURE_RTOS/App \
   -I$(EXTERNAL_DIR)/stm32f4xx_hal/STM32F4xx_HAL_Driver/Inc \
@@ -77,12 +84,14 @@ C_INCLUDES = \
 FATFS_SOURCES = $(filter-out %/diskio.c %/ff_gen_drv.c,$(wildcard $(EXTERNAL_DIR)/fatfs/src/*.c))
 CFUTURE_SOURCES = \
   $(EXTERNAL_DIR)/cfuture/src/cfuture.c \
+  $(EXTERNAL_DIR)/cfuture/src/cfuture_pal.c \
   $(filter-out %_posix.c %_win32.c,$(wildcard $(EXTERNAL_DIR)/cfuture/src/adapters/*.c))
 
 C_SOURCES = \
   $(wildcard Core/Src/*.c) \
-  $(wildcard os_glue/src/*.c) \
-  $(wildcard $(APP_DIR)/src/*.c) \
+  $(wildcard osal/src/*.c) \
+  $(wildcard pal/src/*.c) \
+  $(wildcard $(APP_DIR)/src/*/*.c) \
   $(wildcard Core/ThreadSafe/*.c) \
   $(wildcard AZURE_RTOS/App/*.c) \
   $(wildcard $(EXTERNAL_DIR)/gcc_newlib_stubs/*.c) \
