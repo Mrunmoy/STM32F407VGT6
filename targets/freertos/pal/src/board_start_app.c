@@ -1,3 +1,4 @@
+#include "cfuture_selftest_irq.h"
 #include "board_start_app.h"
 
 #include "app.h"
@@ -73,6 +74,7 @@ void board_start_app(void)
 
     deps.watchdogTaskEntry = crashDumpWatchdogTaskEntry;
     deps.watchdogTaskStackBytes = kWatchdogStackBytes;
+    deps.cfutureSelfTestRaiseIrq = cfuture_selftest_raise_irq;
 
     if (!appRun(&deps))
     {

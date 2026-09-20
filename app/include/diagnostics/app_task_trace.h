@@ -46,7 +46,7 @@ enum
 {
     /* Matches app_threads.h's kAppThreadRegistryCapacity - one trace slot
      * per registerable task. */
-    kAppTaskTraceCapacity = 8U,
+    kAppTaskTraceCapacity = 10U,
 
     kAppTaskTraceCheckpointNone = 0,
 };

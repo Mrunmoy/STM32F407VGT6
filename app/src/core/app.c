@@ -89,6 +89,8 @@ bool appRun(const AppDependencies *deps)
     registered = registerUsbHostProcess(&registry, deps) && registered;
     registered = registerWatchdog(&registry, deps) && registered;
     registered = storageDemoRegister(&registry, &s_storage, &s_logger, deps->cfutureSyncOps) && registered;
+    registered =
+        cfutureSelfTestRegister(&registry, &s_logger, deps->cfutureSyncOps, deps->cfutureSelfTestRaiseIrq) && registered;
 
     if (!registered)
     {
