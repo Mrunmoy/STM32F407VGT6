@@ -48,6 +48,7 @@ The showcase workload implements an asynchronous, lock-free USB Host Mass Storag
 - [9. Diagnostics, Testing & Host Tooling](#9-diagnostics-testing--host-tooling)
   - [Real-Time UART Exception Decoder](#real-time-uart-exception-decoder)
   - [libcfuture On-Target Self-Test](#libcfuture-on-target-self-test)
+  - [Fixed Issues](#fixed-issues-kept-here-because-each-one-was-found-on-the-board-not-by-reading-code)
   - [Known Issues](#known-issues)
   - [Runtime Task Profiling Telemetry](#runtime-task-profiling-telemetry)
 - [10. License](#10-license)
@@ -747,20 +748,36 @@ Disassembly:
 
 | Check | What it proves |
 | :--- | :--- |
-| `ctrl-delay20`, `ctrl-rawwait20` | Controls with no library involved: a plain `osal_delay_ms(20)` and a raw `event_wait(20)`, reported next to libcfuture's own PAL clock. If these are late, the scheduler is being starved (see Known Issues), not the library. |
+| `ctrl-delay20`, `ctrl-rawwait20` | Controls with no library involved: a plain `osal_delay_ms(20)` and a raw `event_wait(20)`, reported next to libcfuture's own PAL clock. If these are late (more than 50 ms), the scheduler is being starved, not the library. |
 | `timeout` (20 / 200 / 1000 ms) | A wait with no producer times out, never early and at most 50 ms late. |
-| `task`, `forever` | A value produced by another task after 50 / 100 ms arrives at that moment (finite and `UINT32_MAX` waits). |
+| `task`, `forever` | A value produced by another task after 50 / 100 ms (finite and `UINT32_MAX` waits) is not delivered early, and the waiter wakes within 20 ms of the moment the producer actually resolved. The producer's own lateness is scheduling, so it is measured separately. |
 | `isr` | The promise is fulfilled from a real interrupt. Only on targets that inject `AppDependencies.cfutureSelfTestRaiseIrq`; FreeRTOS does, by software-pending the otherwise unused `CAN2_SCE` NVIC line (`targets/freertos/pal/src/cfuture_selftest_irq.c`). Other targets log `SKIP`. |
 | `stale` | A promise copy from a slot's previous occupant cannot complete the next occupant. |
 | `cancel` | `cfuture_cancel()` returns an undispatched pair, and every slot is claimable afterwards (no leak). |
 
-Results on the FK407M2-ZGT6 with `external/cfuture` at janus `bd78e32`, measured with the storage demo and USB host task disabled (see Known Issues): FreeRTOS 143 PASS / 0 FAIL, ThreadX 155 PASS / 0 FAIL, Zephyr 156 PASS / 0 FAIL; timeouts of 20 / 200 / 1000 ms measured 20 / 200 / 1000 ms on all three.
+Results on the FK407M2-ZGT6 with `external/cfuture` at janus `bd78e32`, **full firmware** (storage demo on a real USB drive, USB host task, watchdog and self-test all running), 120 s captured from boot over UART:
+
+| Target | Storage scenarios (PASS / FAIL) | Self-test (PASS / FAIL) | Timeouts 20 / 200 / 1000 ms | Max wake-up latency after resolve |
+| :--- | :--- | :--- | :--- | :--- |
+| FreeRTOS | 126 / 0 | 319 / 0 | 20 / 200-207 / 1000 | 1 ms (incl. real-interrupt fulfilment) |
+| ThreadX | 144 / 0 | 324 / 0 (ISR check skipped) | 20-30 / 200 / 1000 | 0 ms (10 ms kernel tick) |
+| Zephyr | 144 / 0 | 324 / 0 (ISR check skipped) | 20-21 / 200-209 / 1000-1001 | 6 ms |
+
+No mount failures, hard faults, watchdog complaints or resets on any target. Host: storage 8 / 0, self-test 20 / 0.
+
+### Fixed Issues (kept here because each one was found on the board, not by reading code)
+
+- **ThreadX: `HAL_GetTick()` ran at a load-dependent 50-200 Hz instead of 1 kHz.** `TICK_INT_PRIORITY` was 15, the same as PendSV. ThreadX's idle loop (`__tx_ts_wait`) runs *inside* the PendSV handler, and an equal-priority interrupt cannot preempt it, so the TIM1 tick was only serviced when the scheduler left idle and the pending ticks coalesced. Now 14. The timer clock factor was also wrong (`PCLK2` instead of `2 x PCLK2` on a prescaled APB2). Verified over SWD: 15,688 ticks in 15,690 ms.
+- **USB host stack starved lower-priority tasks.** `USBH_Delay()` and the HAL's own port reset call `HAL_Delay()`, a busy-wait; one attach costs about 310 ms of it in a High-priority task (a plain `osal_delay_ms(20)` measured 108-319 ms). `HAL_Delay()` is now overridden per target (`targets/{freertos,threadx}/pal/src/hal_delay.c`) to sleep when a task calls it, and still busy-waits before the scheduler starts or in interrupt context. Zephyr's HAL glue already did this.
+- **Watchdog task's trace dump held the CPU about 80 ms.** Ten lines of polled UART at High priority; any lower-priority task that became ready meanwhile woke 59-70 ms late. The dump now yields between lines.
+- **Every boot logged one FAIL per storage scenario.** Requesters started before USB enumeration finished and their first request hit "FatFS mount failed". The storage service now probes for the media while idle and publishes `storageServiceIsReady()`; requesters hold their first iteration on it (bounded at 10 s, so an absent drive still shows up as FAILs).
+- **OSAL task tables smaller than the thread registry.** ThreadX and Zephyr OSALs capped tasks at 8 while `kAppThreadRegistryCapacity` is 10: the full firmware failed with `appRun: thread start failed` and reset-looped. Both are 10 now, with a comment tying them to the registry capacity.
+- **Header changes used to leave stale objects.** The FreeRTOS and ThreadX Makefiles included dependency files with `$(wildcard $(BUILD_DIR)/**/*.d)`, which does not recurse in make, so no header change ever triggered a rebuild (a library handle-layout change then hard-faulted at boot). They now use `find`. Note that removing a source file still does not relink: delete the ELF or clean.
 
 ### Known Issues
 
-- **USB host task starves lower-priority tasks while a drive fails to enumerate.** `USBH_Delay()` is `HAL_Delay()` (a busy-wait), the attach path burns about 310 ms of it, and the task runs at `kOsalPriorityHigh`. A drive that is detected but never enumerates puts the stack into an attach/reset loop, and every Normal-priority task then stalls ~310 ms at a time (measured: `osal_delay_ms(20)` taking 319 ms). Not fixed.
-- **ThreadX target: `HAL_GetTick()` runs about 20x slow** (a real 20 ms advances it by 1). Nothing in the application depends on it today, and libcfuture no longer does either, but HAL drivers that use `HAL_Delay()`/timeouts on this target are affected. Not fixed.
-- **Header changes used to leave stale objects.** The FreeRTOS and ThreadX Makefiles included dependency files with `$(wildcard $(BUILD_DIR)/**/*.d)`, which does not recurse in make, so no header change ever triggered a rebuild (a library handle-layout change then hard-faulted at boot). They now use `find`.
+- **A USB drive that is detected but will not enumerate cannot be recovered by firmware.** Seen once during this work (port showed `PCSTS=1`, host state machine looping `HOST_IDLE`/`HOST_DEV_WAIT_FOR_ATTACHMENT`, on `main` firmware too); not reproducible afterwards (10 of 10 resets and re-flashes enumerated). The board cannot power-cycle VBUS (`USBH_LL_DriverVBUS()` is a no-op), so re-seating the drive is the only recovery.
+- **UART logging is polled.** Every log line still costs about 8 ms of CPU at the caller's priority; interrupt- or DMA-driven transmit would remove that.
 
 ### Runtime Task Profiling Telemetry
 
