@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #include "logger.h"
@@ -49,3 +50,9 @@ typedef struct StorageServiceConfig
  * StorageServiceConfig that outlives the task (a static instance, per this
  * project's no-dynamic-allocation rule - see storage_demo.c). */
 void storageServiceTaskEntry(void *context);
+
+/* True once the service has the volume mounted and its block file open. The service mounts
+ * on its own while idle (USB enumeration takes a second or two after boot), so requesters
+ * can hold their first request until this turns true instead of collecting a
+ * "FatFS mount failed" error. Safe to call from any task. */
+bool storageServiceIsReady(void);

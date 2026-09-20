@@ -65,6 +65,12 @@ enum
      * 1 - it only ever prevented the *first* one. */
     kClientTaskStartStaggerMs = 100U,
 
+    /* How long a task holds its first iteration for the media to report ready, and how
+     * often it looks. Past this it carries on, so a genuinely absent drive still shows up
+     * as scenario FAILs rather than as silence. */
+    kClientTaskMediaWaitMs = 10000U,
+    kClientTaskMediaPollMs = 50U,
+
     /* occupyServicer()'s caller drains that request once the scenario is
      * done with it. T_S is expected to finish it (plus, for scenarios 3/4,
      * discover and discard whatever was queued behind it) well within this
@@ -285,6 +291,23 @@ static void runHappyPathScenario(const ClientTaskConfig *config)
                        pass ? "write/read roundtrip verified" : "readback mismatch");
 }
 
+/* Requests sent before USB enumeration finishes fail with "FatFS mount failed", which made
+ * every scenario log one FAIL per boot. Hold the first iteration until the storage service
+ * reports its volume ready (it mounts on its own while idle). */
+static void waitForMedia(const char *taskName)
+{
+    for (uint32_t waitedMs = 0U; waitedMs < kClientTaskMediaWaitMs; waitedMs += kClientTaskMediaPollMs)
+    {
+        if (storageServiceIsReady() || appTaskTraceShouldStop(taskName))
+        {
+            return;
+        }
+
+        appTaskTraceCheckpoint(taskName, "waiting for media");
+        osal_delay_ms(kClientTaskMediaPollMs);
+    }
+}
+
 void clientTaskHappyPathEntry(void *context)
 {
     static const char kTaskName[] = "StorageDemoHappy";
@@ -292,6 +315,7 @@ void clientTaskHappyPathEntry(void *context)
     const ClientTaskConfig *config = (const ClientTaskConfig *)context;
 
     osal_delay_ms(0U * kClientTaskStartStaggerMs);
+    waitForMedia(kTaskName);
     for (;;)
     {
         appTaskTraceLoopStart(kTaskName);
@@ -380,6 +404,7 @@ void clientTaskQueueTimeoutEntry(void *context)
     const ClientTaskConfig *config = (const ClientTaskConfig *)context;
 
     osal_delay_ms(1U * kClientTaskStartStaggerMs);
+    waitForMedia(kTaskName);
     for (;;)
     {
         appTaskTraceLoopStart(kTaskName);
@@ -455,6 +480,7 @@ void clientTaskLateCompletionEntry(void *context)
     const ClientTaskConfig *config = (const ClientTaskConfig *)context;
 
     osal_delay_ms(2U * kClientTaskStartStaggerMs);
+    waitForMedia(kTaskName);
     for (;;)
     {
         appTaskTraceLoopStart(kTaskName);
@@ -561,6 +587,7 @@ void clientTaskAbaIsolationEntry(void *context)
     const ClientTaskConfig *config = (const ClientTaskConfig *)context;
 
     osal_delay_ms(3U * kClientTaskStartStaggerMs);
+    waitForMedia(kTaskName);
     for (;;)
     {
         appTaskTraceLoopStart(kTaskName);
