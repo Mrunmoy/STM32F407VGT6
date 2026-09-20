@@ -185,6 +185,7 @@ $(BUILD_DIR)/%.bin: $(BUILD_DIR)/%.elf
 clean:
 	rm -rf $(BUILD_DIR)
 
--include $(wildcard $(BUILD_DIR)/**/*.d)
+# make's wildcard does not recurse with **, which silently dropped every header dependency.
+-include $(shell find $(BUILD_DIR) -name '*.d' 2>/dev/null)
 
 .PHONY: all clean
