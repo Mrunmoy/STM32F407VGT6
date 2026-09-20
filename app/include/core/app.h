@@ -1,6 +1,7 @@
 #pragma once
 
 #include "cfuture.h"
+#include "diagnostics/cfuture_selftest.h"
 #include "osal/osal.h"
 #include "pal/pal_led.h"
 #include "pal/pal_log_sink.h"
@@ -39,6 +40,10 @@ typedef struct AppDependencies
      * nothing target-specific to inject here. */
     OsalTaskEntryFn watchdogTaskEntry;
     uint32_t watchdogTaskStackBytes;
+
+    /* Optional: lets the libcfuture self-test fulfil a promise from a real interrupt.
+     * Leave NULL where no spare interrupt is wired up; that one check then reports SKIP. */
+    CfutureSelfTestRaiseIrqFn cfutureSelfTestRaiseIrq;
 } AppDependencies;
 
 /* The ONE place every application thread is started, for every target.

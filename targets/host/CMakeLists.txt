@@ -22,6 +22,7 @@ add_executable(storage_demo_host
     ${APP_DIR}/src/core/logger.c
     ${APP_DIR}/src/diagnostics/app_task_trace.c
     ${APP_DIR}/src/diagnostics/blinky_task.c
+    ${APP_DIR}/src/diagnostics/cfuture_selftest.c
     ${APP_DIR}/src/storage/storage_service.c
     ${APP_DIR}/src/storage/client_tasks.c
     ${APP_DIR}/src/storage/storage_demo.c

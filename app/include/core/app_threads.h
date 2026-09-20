@@ -15,7 +15,7 @@ enum
     /* Sized to exactly what this app ever registers today: Blinky (1) +
      * UsbHostProcess (1, embedded targets only) + storage showcase's
      * Servicer + 4 Requesters (5) = 7. Headroom to 8. */
-    kAppThreadRegistryCapacity = 8U,
+    kAppThreadRegistryCapacity = 10U,
 };
 
 typedef struct AppThreadRegistry

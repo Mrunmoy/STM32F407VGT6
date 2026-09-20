@@ -40,6 +40,7 @@ target_sources(app PRIVATE
     ${SHARED_APP_DIR}/src/core/logger.c
     ${SHARED_APP_DIR}/src/diagnostics/app_task_trace.c
     ${SHARED_APP_DIR}/src/diagnostics/blinky_task.c
+    ${SHARED_APP_DIR}/src/diagnostics/cfuture_selftest.c
     ${SHARED_APP_DIR}/src/diagnostics/crash_dump.c
     ${SHARED_APP_DIR}/src/storage/storage_service.c
     ${SHARED_APP_DIR}/src/storage/client_tasks.c
