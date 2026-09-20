@@ -624,6 +624,11 @@ void crashDumpWatchdogTaskEntry(void *context)
                 if (appTaskTraceGetByIndex(i, &trace))
                 {
                     logTaskProfile(logger, &trace);
+
+                    /* Each line is ~8 ms of polled UART at this task's High priority. Without a
+                     * gap the whole dump held the CPU ~80 ms and delayed every lower-priority
+                     * task that became ready meanwhile (measured: 59-70 ms wake-up outliers). */
+                    osal_delay_ms(1U);
                 }
             }
         }
