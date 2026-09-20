@@ -41,11 +41,14 @@ The showcase workload implements an asynchronous, lock-free USB Host Mass Storag
 - [6. Hardware Specification & Electrical Wiring](#6-hardware-specification--electrical-wiring)
 - [7. Repository Layout & File Taxonomy](#7-repository-layout--file-taxonomy)
 - [8. Toolchain Setup & Build Guide](#8-toolchain-setup--build-guide)
+  - [Getting the Sources](#getting-the-sources)
   - [Prerequisites](#prerequisites)
   - [Unified Build Driver (`build.py`)](#unified-build-driver-buildpy)
   - [Zephyr Freestanding Workspace](#zephyr-freestanding-workspace)
 - [9. Diagnostics, Testing & Host Tooling](#9-diagnostics-testing--host-tooling)
   - [Real-Time UART Exception Decoder](#real-time-uart-exception-decoder)
+  - [libcfuture On-Target Self-Test](#libcfuture-on-target-self-test)
+  - [Known Issues](#known-issues)
   - [Runtime Task Profiling Telemetry](#runtime-task-profiling-telemetry)
 - [10. License](#10-license)
 
@@ -186,7 +189,7 @@ sequenceDiagram
     PAL-->>FatFS: Block I/O completion
     FatFS-->>Svc: Filesystem status
     
-    Svc->>Pool: cfuture_set_result(StorageResult)
+    Svc->>Pool: cpromise_set_value(StorageResult)
     Pool-->>Client: Wake up waiting thread with result
     Client->>Pool: Release promise slot
 ```
@@ -391,16 +394,21 @@ Implement the contracts in `targets/<new_rtos>/osal/src/` and `targets/<new_rtos
    - **Heap Memory (for USB Host Library)**:
      - `osal_malloc(size_t size)`, `osal_free(void *ptr)`: Route to the RTOS byte pool or standard library heap.
 
-2. **`cfuture_sync_ops.c` (`external/cfuture/`)**:
+2. **`cfuture_sync_ops.c` (contract: `external/cfuture/include/cfuture_osal.h`)**:
    - Implement the `cfuture_sync_ops_t` table linking `libcfuture`'s promise synchronization to the RTOS's native binary semaphore or event flag:
      ```c
-     static bool sem_create(cfuture_sem_t *sem);
-     static void sem_destroy(cfuture_sem_t *sem);
-     static bool sem_wait(cfuture_sem_t *sem, uint32_t timeout_ms);
-     static void sem_post(cfuture_sem_t *sem);
+     static void *event_create(void);
+     static void event_destroy(void *eventHandle);
+     static void event_set(void *eventHandle);
+     static bool event_wait(void *eventHandle, uint32_t timeoutMs);
+     static void event_reset(void *eventHandle);
+     static void event_set_from_isr(void *eventHandle);
 
      const cfuture_sync_ops_t *cfuture_sync_ops_get(void);
      ```
+   - The primitive must **latch** a set that arrives before the wait starts (a binary semaphore or an event flag does).
+   - `event_wait` must return `false` only once `timeoutMs` has really elapsed: `libcfuture` uses that backend timeout as its only time base in event mode and does not re-check it against any other clock. `UINT32_MAX` means wait forever.
+   - Map `event_set_from_isr` to the kernel's ISR-safe call if promises may be fulfilled from interrupt context (the FreeRTOS target does, via `xSemaphoreGiveFromISR`).
 
 3. **`board_led.c` (`app/include/pal/pal_led.h`)**:
    - Implement `board_led_init(PalLed *outDev)` binding `on`, `off`, and `toggle` function pointers to hardware GPIO controls.
@@ -524,7 +532,8 @@ stm32f407-threadx/
 │   │   ├── diagnostics/               # Observability & health monitoring
 │   │   │   ├── app_task_trace.h       # Lock-free task telemetry and supervision interfaces
 │   │   │   ├── crash_dump.h           # Bare-metal CPU exception handler & IWDG watchdog
-│   │   │   └── blinky_task.h          # Diagnostic heartbeat task
+│   │   │   ├── blinky_task.h          # Diagnostic heartbeat task
+│   │   │   └── cfuture_selftest.h     # Storage-free on-target self-test of libcfuture
 │   │   ├── storage/                   # Asynchronous storage service & showcase client tasks
 │   │   │   ├── storage_service.h      # Storage service worker task
 │   │   │   ├── storage_protocol.h     # Storage request/result message payload types
@@ -544,7 +553,8 @@ stm32f407-threadx/
 │       ├── diagnostics/               # Diagnostic & health supervision
 │       │   ├── app_task_trace.c       # Turnaround, cadence, and checkpoint tracking engine
 │       │   ├── crash_dump.c           # Naked register capture, raw UART dump, IWDG task
-│       │   └── blinky_task.c          # Heartbeat implementation
+│       │   ├── blinky_task.c          # Heartbeat implementation
+│       │   └── cfuture_selftest.c     # libcfuture on-target self-test tasks
 │       ├── storage/                   # Storage pipeline
 │       │   ├── storage_service.c      # Worker task executing filesystem transactions
 │       │   ├── storage_demo.c         # Queue allocation, promise pool init, task registration
@@ -555,8 +565,9 @@ stm32f407-threadx/
 │           ├── usb_host.c             # USB Host background processing state machine
 │           ├── usbh_conf.c            # ST USB Host low-level driver glue
 │           └── usbh_msc_disk.c        # PalStorage block driver over USB Host MSC
-├── external/                          # Vendored third-party code (Plain vendored, no submodules)
-│   ├── cfuture/                       # libcfuture: Zero-heap lock-free promise/future library
+├── .gitmodules                        # Declares the external/cfuture submodule
+├── external/                          # Third-party code: plain vendored, except cfuture (git submodule)
+│   ├── cfuture/                       # libcfuture: git submodule of github.com/Mrunmoy/janus, pinned to a commit
 │   ├── fatfs/                         # Chan's FatFS R0.15 filesystem library
 │   ├── gcc_newlib_stubs/              # Reentrant syscalls.c and sysmem.c stubs
 │   ├── stm32f4xx_hal/                 # ST Microelectronics CMSIS & STM32F4xx HAL V1.8.5
@@ -594,6 +605,18 @@ stm32f407-threadx/
 ---
 
 ## 8. Toolchain Setup & Build Guide
+
+### Getting the Sources
+
+`libcfuture` is a git submodule (`external/cfuture` -> <https://github.com/Mrunmoy/janus>), pinned to an exact commit so the library cannot drift from the application code that was tested against it:
+
+```bash
+git clone --recurse-submodules https://github.com/Mrunmoy/STM32F407VGT6.git
+# or, in an existing clone:
+git submodule update --init
+```
+
+To move to a newer library revision, check out the wanted commit inside `external/cfuture`, rebuild and re-run every target (a handle layout change is an ABI change for all of `app/`), then commit the new submodule pointer.
 
 ### Prerequisites
 
@@ -712,6 +735,32 @@ Disassembly:
 ```
 
 ---
+
+### libcfuture On-Target Self-Test
+
+`app/src/diagnostics/cfuture_selftest.c` registers two tasks (`CfstWaiter`, `CfstProducer`) on every target. It needs no storage and logs one line per check, every ~2 s:
+
+```text
+[EVENT] cfst timeout PASS: requested ms, elapsed ms (200, 200)
+[EVENT] cfst isr PASS: producer delay ms, elapsed ms (30, 30)
+```
+
+| Check | What it proves |
+| :--- | :--- |
+| `ctrl-delay20`, `ctrl-rawwait20` | Controls with no library involved: a plain `osal_delay_ms(20)` and a raw `event_wait(20)`, reported next to libcfuture's own PAL clock. If these are late, the scheduler is being starved (see Known Issues), not the library. |
+| `timeout` (20 / 200 / 1000 ms) | A wait with no producer times out, never early and at most 50 ms late. |
+| `task`, `forever` | A value produced by another task after 50 / 100 ms arrives at that moment (finite and `UINT32_MAX` waits). |
+| `isr` | The promise is fulfilled from a real interrupt. Only on targets that inject `AppDependencies.cfutureSelfTestRaiseIrq`; FreeRTOS does, by software-pending the otherwise unused `CAN2_SCE` NVIC line (`targets/freertos/pal/src/cfuture_selftest_irq.c`). Other targets log `SKIP`. |
+| `stale` | A promise copy from a slot's previous occupant cannot complete the next occupant. |
+| `cancel` | `cfuture_cancel()` returns an undispatched pair, and every slot is claimable afterwards (no leak). |
+
+Results on the FK407M2-ZGT6 with `external/cfuture` at janus `bd78e32`, measured with the storage demo and USB host task disabled (see Known Issues): FreeRTOS 143 PASS / 0 FAIL, ThreadX 155 PASS / 0 FAIL, Zephyr 156 PASS / 0 FAIL; timeouts of 20 / 200 / 1000 ms measured 20 / 200 / 1000 ms on all three.
+
+### Known Issues
+
+- **USB host task starves lower-priority tasks while a drive fails to enumerate.** `USBH_Delay()` is `HAL_Delay()` (a busy-wait), the attach path burns about 310 ms of it, and the task runs at `kOsalPriorityHigh`. A drive that is detected but never enumerates puts the stack into an attach/reset loop, and every Normal-priority task then stalls ~310 ms at a time (measured: `osal_delay_ms(20)` taking 319 ms). Not fixed.
+- **ThreadX target: `HAL_GetTick()` runs about 20x slow** (a real 20 ms advances it by 1). Nothing in the application depends on it today, and libcfuture no longer does either, but HAL drivers that use `HAL_Delay()`/timeouts on this target are affected. Not fixed.
+- **Header changes used to leave stale objects.** The FreeRTOS and ThreadX Makefiles included dependency files with `$(wildcard $(BUILD_DIR)/**/*.d)`, which does not recurse in make, so no header change ever triggered a rebuild (a library handle-layout change then hard-faulted at boot). They now use `find`.
 
 ### Runtime Task Profiling Telemetry
 
