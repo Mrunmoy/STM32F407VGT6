@@ -1,0 +1,3 @@
+[submodule "external/cfuture"]
+	path = external/cfuture
+	url = https://github.com/Mrunmoy/janus.git
