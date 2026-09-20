@@ -161,7 +161,10 @@
   * @brief This is the HAL system configuration section
   */
 #define  VDD_VALUE		      3300U /*!< Value of VDD in mv */
-#define  TICK_INT_PRIORITY            15U   /*!< tick interrupt priority */
+/* Must outrank PendSV (priority 15): ThreadX's idle loop (__tx_ts_wait) runs inside the PendSV
+ * handler, and an equal-priority interrupt cannot preempt it. At 15 the HAL tick was only
+ * serviced when the scheduler left PendSV, so uwTick ran at 50-200 Hz depending on load. */
+#define  TICK_INT_PRIORITY            14U   /*!< tick interrupt priority */
 #define  USE_RTOS                     0U
 #define  PREFETCH_ENABLE              1U
 #define  INSTRUCTION_CACHE_ENABLE     1U

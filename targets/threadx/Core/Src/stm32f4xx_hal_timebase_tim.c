@@ -54,8 +54,12 @@ HAL_StatusTypeDef HAL_InitTick(uint32_t TickPriority)
   /* Get clock configuration */
   HAL_RCC_GetClockConfig(&clkconfig, &pFLatency);
 
-  /* Compute TIM1 clock */
-      uwTimclock = HAL_RCC_GetPCLK2Freq();
+  /* Compute TIM1 clock: timers on a prescaled APB bus run at twice the bus clock */
+  uwTimclock = HAL_RCC_GetPCLK2Freq();
+  if (clkconfig.APB2CLKDivider != RCC_HCLK_DIV1)
+  {
+    uwTimclock *= 2U;
+  }
 
   /* Compute the prescaler value to have TIM1 counter clock equal to 1MHz */
   uwPrescalerValue = (uint32_t) ((uwTimclock / 1000000U) - 1U);

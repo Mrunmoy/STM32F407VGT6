@@ -6,6 +6,8 @@
 #include "cfuture.h"
 #include "ff.h"
 
+#include <stdatomic.h>
+
 enum
 {
     /* storageServiceTaskEntry()'s queue receive used to block forever
@@ -15,6 +17,9 @@ enum
      * that's actually deadlocked. Polling on a bounded wait instead means
      * it checks in at least this often even with zero requests arriving. */
     kStorageServiceIdlePollMs = 1000U,
+
+    /* While the volume is not mounted, how often the idle service probes for the media. */
+    kStorageServiceMountProbeMs = 100U,
 };
 
 /* Single backing file used as a flat array of kStorageBlockSize-byte blocks;
@@ -23,7 +28,16 @@ enum
  * 8.3 short name - this project's ffconf.h fixes _USE_LFN == 0. */
 static const char kBlockFileName[] = "STORAGE.BIN";
 
-static bool mountVolume(FATFS *filesystem, Logger *logger)
+/* Written only by the service task, read by requesters through storageServiceIsReady(). */
+static atomic_bool s_volumeReady;
+
+bool storageServiceIsReady(void)
+{
+    return atomic_load_explicit(&s_volumeReady, memory_order_acquire);
+}
+
+/* quiet: an idle-time probe that finds no media yet is expected, not an error worth logging. */
+static bool mountVolume(FATFS *filesystem, Logger *logger, bool quiet)
 {
     FRESULT result = f_mount(filesystem, "", 1U);
 
@@ -47,7 +61,10 @@ static bool mountVolume(FATFS *filesystem, Logger *logger)
 
     if (result != FR_OK)
     {
-        loggerLog(logger, kLogLevelError, "storage: FatFS mount failed");
+        if (!quiet)
+        {
+            loggerLog(logger, kLogLevelError, "storage: FatFS mount failed");
+        }
         return false;
     }
 
@@ -249,8 +266,24 @@ void storageServiceTaskEntry(void *context)
 
         StorageRequest request;
         appTaskTraceCheckpoint(kTaskName, "waiting for queue");
-        if (!osal_queue_receive(config->queue, &request, (uint32_t)kStorageServiceIdlePollMs))
+        const uint32_t pollMs = volumeReady ? (uint32_t)kStorageServiceIdlePollMs : (uint32_t)kStorageServiceMountProbeMs;
+        if (!osal_queue_receive(config->queue, &request, pollMs))
         {
+            /* Idle and not mounted yet: probe for the media so the volume comes up as soon
+             * as it can, rather than only when a request happens to arrive. */
+            if (!volumeReady)
+            {
+                appTaskTraceCheckpoint(kTaskName, "probing for media");
+                volumeReady = mountVolume(&filesystem, config->logger, true);
+                if (volumeReady)
+                {
+                    mounted = true;
+                    volumeReady = openBlockFile(&file, config->logger);
+                    fileOpen = volumeReady;
+                }
+                atomic_store_explicit(&s_volumeReady, volumeReady, memory_order_release);
+            }
+
             /* Nothing arrived within the poll window - not an error, just
              * idle. Still counts as a completed loop iteration for check-in
              * purposes, which is the whole point of polling here instead of
@@ -273,7 +306,7 @@ void storageServiceTaskEntry(void *context)
         if (!volumeReady)
         {
             appTaskTraceCheckpoint(kTaskName, "mounting");
-            volumeReady = mountVolume(&filesystem, config->logger);
+            volumeReady = mountVolume(&filesystem, config->logger, false);
             if (volumeReady)
             {
                 mounted = true;
@@ -284,6 +317,7 @@ void storageServiceTaskEntry(void *context)
 
         appTaskTraceCheckpoint(kTaskName, "servicing request");
         volumeReady = serviceRequest(&file, volumeReady, &request);
+        atomic_store_explicit(&s_volumeReady, volumeReady, memory_order_release);
 
         appTaskTraceLoopEnd(kTaskName);
     }
