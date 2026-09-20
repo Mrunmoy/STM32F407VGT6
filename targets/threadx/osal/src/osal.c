@@ -37,7 +37,9 @@ enum
     kOsalPriorityNormalValue = 12U,
     kOsalPriorityLowValue = 16U,
 
-    kMaxOsalTasks = 8U,
+    /* Must be >= kAppThreadRegistryCapacity (app/include/core/app_threads.h): a smaller
+     * value makes appRun() fail with "thread start failed" and the board reset-loops. */
+    kMaxOsalTasks = 10U,
     kMaxOsalQueues = 4U,
     kMaxOsalMutexes = 4U,
 };

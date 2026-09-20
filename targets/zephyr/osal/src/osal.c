@@ -10,7 +10,9 @@ enum
      * pump (usb_host.c) plus storage_demo.c's 5 tasks (Servicer + 4
      * Requesters) - 8 leaves headroom, matching the ThreadX target's own
      * osal.c s_taskSlots[8] sizing for the same reason. */
-    kOsalMaxTasks = 8U,
+    /* Must be >= kAppThreadRegistryCapacity (app/include/core/app_threads.h): a smaller
+     * value makes appRun() fail with "thread start failed" and the board reset-loops. */
+    kOsalMaxTasks = 10U,
 };
 
 /* ── Task creation ────────────────────────────────────────────────────── */
